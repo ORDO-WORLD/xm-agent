@@ -6,6 +6,7 @@ import { Boxes, ClipboardList, Eye, History, Pencil, PhoneCall, Plus, Tag, Uploa
 import { BarsChart, Sparkline } from '@/components/charts/charts';
 import { colors } from '@/components/charts/chart-setup';
 import { EmptyState, ErrorNotice, IconBadge, LoadingRows, PageHeader, Panel, StatTile } from '@/components/app/primitives';
+import { SalesListingsModal } from '@/components/app/sales-listings-modal';
 import { TrackedEditor } from '@/components/app/tracked-editor';
 import { PeriodPicker, type Period } from '@/components/app/period-picker';
 import { BlurFade } from '@/components/magicui/blur-fade';
@@ -28,12 +29,14 @@ const EVENT = {
 
 const salesName = (item: { label: string | null; contact_name: string | null; phone: string }) => item.label || cleanName(item.contact_name) || 'Sales';
 
-export default function StockPage({ navigate }: { navigate?: Navigate }) {
+export default function StockPage(_props: { navigate?: Navigate }) {
   const api = useApi();
   const { company, refresh } = useCompany();
   const canEdit = !!company?.permissions.manage_settings;
   const [tick, setTick] = useState(0);
   const editor = useOverlayState();
+  const listings = useOverlayState();
+  const [viewing, setViewing] = useState<StockTracked | null>(null);
   const [phone, setPhone] = useState('');
   const [period, setPeriod] = useState<Period>({ preset: 'all', from: '', to: '' });
   const [limit, setLimit] = useState(30);
@@ -92,7 +95,7 @@ export default function StockPage({ navigate }: { navigate?: Navigate }) {
 
           <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
             {tracked.map((item, index) => (
-              <BlurFade key={item.phone} delay={0.05 * index}><SalesCard item={item} onOpen={() => navigate?.('cocokkan', { arah: 'property', nomor: item.phone })} /></BlurFade>
+              <BlurFade key={item.phone} delay={0.05 * index}><SalesCard item={item} onOpen={() => { setViewing(item); listings.open(); }} /></BlurFade>
             ))}
           </div>
 
@@ -132,6 +135,7 @@ export default function StockPage({ navigate }: { navigate?: Navigate }) {
         </Panel>
       )}
 
+      <SalesListingsModal state={listings} phone={viewing?.phone ?? ''} name={viewing ? salesName(viewing) : ''} />
       <TrackedEditor state={editor} current={tracked} onSaved={() => { setTick((value) => value + 1); refresh(); }} />
     </div>
   );
