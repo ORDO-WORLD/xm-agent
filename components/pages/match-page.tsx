@@ -46,8 +46,10 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   const { company } = useCompany();
 
   const [direction, setDirection] = useState<Direction>(params?.get('arah') === 'property' ? 'property' : 'buyer');
+  // A link naming one item or one sales number must show everything of theirs, not only Hot/Warm matches that are still Ready.
+  const fromLink = !!(params?.get('id') || params?.get('nomor'));
   const [filters, setFilters] = useState<ListFilters>({
-    temps: ['hot', 'warm'], stock: ['ready'], period: { preset: 'all', from: '', to: '' }, publicId: params?.get('id') ?? '', phones: params?.get('nomor') ?? '',
+    temps: fromLink ? ['hot', 'warm', 'unmatched'] : ['hot', 'warm'], stock: fromLink ? ['ready', 'on_hold', 'sold'] : ['ready'], period: { preset: 'all', from: '', to: '' }, publicId: params?.get('id') ?? '', phones: params?.get('nomor') ?? '',
   });
   const [prefsReady, setPrefsReady] = useState(false);
   // Arriving with a specific ID or phone number: show the plain list so the card is right there.
@@ -61,14 +63,14 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   useEffect(() => {
     void api.get<{ direction: Direction; statuses: MatchFilter[] }>('/preferences').then((prefs) => {
       if (!urlDirection) setDirection(prefs.direction);
-      if (prefs.statuses?.length) setFilters((current) => ({ ...current, temps: prefs.statuses }));
+      if (prefs.statuses?.length && !fromLink) setFilters((current) => ({ ...current, temps: prefs.statuses }));
     }).catch(() => {}).finally(() => setPrefsReady(true));
-  }, [api, urlDirection]);
+  }, [api, urlDirection, fromLink]);
   useEffect(() => {
-    if (!prefsReady) return;
+    if (!prefsReady || fromLink) return;
     const timer = window.setTimeout(() => { void api.put('/preferences', { direction, statuses: filters.temps.length ? filters.temps : ['hot', 'warm'] }).catch(() => {}); }, 500);
     return () => window.clearTimeout(timer);
-  }, [api, direction, filters.temps, prefsReady]);
+  }, [api, direction, filters.temps, prefsReady, fromLink]);
 
   const groupBy: GroupBy = company?.listing_group_by ?? 'sender';
   const search = (company?.effective_terms ?? []).join('\n');
