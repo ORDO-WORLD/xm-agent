@@ -160,13 +160,8 @@ async def upload_import(file: UploadFile = File(...), agent_name: str | None = F
     destination = UPLOAD_DIR / workspace_id() / f"{import_id}.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
-    size = 0
     with destination.open("wb") as output:
         while chunk := await file.read(1024 * 1024):
-            size += len(chunk)
-            if size > 100 * 1024 * 1024:
-                destination.unlink(missing_ok=True)
-                raise HTTPException(413, "Ukuran file maksimum 100 MB")
             digest.update(chunk)
             output.write(chunk)
     try:

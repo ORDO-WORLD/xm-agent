@@ -17,7 +17,6 @@ import type { ImportRow } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/lib/workspace-context';
 
-const MAX_MB = 100;
 const statusLabel: Record<string, string> = { queued: 'Menunggu antrean', processing: 'Sedang diproses', completed: 'Selesai', failed: 'Gagal' };
 
 function steps(item: ImportRow) {
@@ -72,7 +71,6 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
     setError(''); setNotice('');
     if (!candidate) return;
     if (!candidate.name.toLowerCase().endsWith('.json')) { setError('Gunakan file berformat .json (cleaned.json dari ekspor chat).'); return; }
-    if (candidate.size > MAX_MB * 1024 * 1024) { setError(`Ukuran file maksimum ${MAX_MB} MB.`); return; }
     setFile(candidate);
     // The export is named "Sales - Kantor - ... - cleaned.json"; its first part is usually the person.
     if (!agent.trim()) setAgent(candidate.name.split(' - ')[0]?.trim().slice(0, 60) ?? '');
@@ -144,7 +142,7 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
                 <>
                   <LottiePlayer name="upload" className="w-28" />
                   <p className="text-lg font-bold">Seret file chat ke sini</p>
-                  <p className="text-base text-muted">atau ketuk untuk memilih file .json (maks. {MAX_MB} MB)</p>
+                  <p className="text-base text-muted">atau ketuk untuk memilih file .json</p>
                 </>
               )}
             </label>
