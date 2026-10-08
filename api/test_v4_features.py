@@ -458,6 +458,36 @@ class StockMonitorTests(V4Case):
         self.assertEqual(self.call(self.boss, '/stock/snapshot', 'POST')['logged'], 2)
         self.assertTrue(all(len(t['history']) >= 2 for t in overview['tracked']))
 
+    def test_excel_export_lists_every_listing_per_sales(self):
+        import io
+        from openpyxl import load_workbook
+        self.track(f'{SALES_A},{SALES_B}')
+        self.run_import([
+            ('Dijual rumah Surabaya Barat LT 100 Harga 1,8 M\nContact: Sari 6282233744657', '~ A'),
+            ('Dijual rumah Surabaya Barat LT 100 Harga 1,8 M\nContact: Sari 6282233744657', '~ B'),
+            ('=Dijual rumah Surabaya Barat LT 110 Harga 1,9 M\nContact: Sari 6282233744657', '~ B'),
+            ('Dijual ruko Rungkut LT 60 Harga 3,5 M\nContact: Andi 081202310022', '~ C'),
+            ('Dijual gudang Sidoarjo LT 500 Harga 5 M\nContact: Lain 081355500011', '~ D'),
+        ])
+        sale = next(r for r in self.rows(direction='property') if 'Andi' in r['raw_text'])
+        self.call(self.staff, '/entities/status', 'POST', {'ids': [sale['public_id']], 'status': 'sold'})
+
+        def sheet(path):
+            rows = list(load_workbook(io.BytesIO(self.call(self.staff, path))).active.iter_rows(values_only=True))
+            self.assertEqual(rows[0], ('Nama', 'No telp', 'Tanggal', 'Baca pesan asli'))
+            return rows[1:]
+        everything = sheet('/stock/export')
+        # Identical texts appear once; sold listings stay; untracked numbers are left out.
+        self.assertEqual([(r[0], r[1]) for r in everything], [('Sari', '+62 822-3374-4657')] * 2 + [('Andi', '+62 812-0231-0022')])
+        self.assertTrue(any(r[3].startswith('=Dijual') for r in everything))
+        self.assertTrue(all(r[2] is not None for r in everything))
+        personal = sheet(f'/stock/export?phone={SALES_B}')
+        self.assertEqual([r[0] for r in personal], ['Andi'])
+        self.assertIn('Rungkut', personal[0][3])
+        self.call(self.staff, '/stock/export?phone=081355500011', status=404)
+        _, _, other = self.make_company('Other')
+        self.assertEqual(load_workbook(io.BytesIO(self.call(other, '/stock/export'))).active.max_row, 1)
+
     def test_stock_is_private_to_the_company(self):
         self.track(SALES_A)
         self.run_import([('Dijual rumah Surabaya Barat LT 100 Harga 1,8 M\nContact: Sari 6282233744657', '~ A')])

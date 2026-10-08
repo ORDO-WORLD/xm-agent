@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { Avatar, Button, Label, ListBox, Select, toast, useOverlayState } from '@heroui/react';
-import { Boxes, ClipboardList, Eye, History, Pencil, PhoneCall, Plus, Tag, UploadCloud } from 'lucide-react';
+import { Boxes, ClipboardList, Download, Eye, History, Pencil, PhoneCall, Plus, Tag, UploadCloud } from 'lucide-react';
 import { BarsChart, Sparkline } from '@/components/charts/charts';
 import { colors } from '@/components/charts/chart-setup';
 import { EmptyState, ErrorNotice, IconBadge, LoadingRows, PageHeader, Panel, StatTile } from '@/components/app/primitives';
@@ -41,6 +41,7 @@ export default function StockPage(_props: { navigate?: Navigate }) {
   const [period, setPeriod] = useState<Period>({ preset: 'all', from: '', to: '' });
   const [limit, setLimit] = useState(30);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null);
 
   const overview = useData((signal) => api.get<StockOverview>('/stock/overview', signal), [tick]);
   const log = useData((signal) => api.get<{ rows: StockLogRow[]; has_more: boolean }>(`/stock/log?${query({ phone, date_from: period.from, date_to: period.to, limit })}`, signal), [phone, period.from, period.to, limit, tick]);
@@ -59,6 +60,22 @@ export default function StockPage(_props: { navigate?: Navigate }) {
   }
 
   const today = todayWib();
+
+  /** Excel of the listings: every tracked sales, or only the one given. */
+  async function download(item?: StockTracked) {
+    setDownloading(item?.phone ?? 'all');
+    try {
+      const blob = await api.file(`/stock/export?${query({ phone: item?.phone })}`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const who = item ? salesName(item).replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '') || item.phone : 'semua_sales';
+      link.href = url; link.download = `stok_listing_${who}_${today}.xlsx`; link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast.success('Excel siap diunduh');
+    } catch (reason) {
+      toast.danger(errorMessage(reason, 'Excel belum dapat dibuat.'));
+    } finally { setDownloading(null); }
+  }
   const presets = [
     { id: 'all', label: 'Semua catatan', range: () => ({ from: '', to: '' }) },
     { id: '7', label: '7 hari terakhir', range: () => ({ from: shiftDay(today, -6), to: today }) },
@@ -68,10 +85,11 @@ export default function StockPage(_props: { navigate?: Navigate }) {
   return (
     <div className="space-y-6">
       <PageHeader title="Stok Sales" description="Pantau berapa listing milik setiap sales, berdasarkan nomor telepon yang tertulis di pesan. Dicatat otomatis setiap kali data diunggah atau status listing diubah."
-        actions={canEdit ? <>
-          <Button variant="secondary" isPending={snapshotBusy} isDisabled={!tracked.length} onPress={snapshot}><ClipboardList className="size-4" aria-hidden="true" />Catat sekarang</Button>
-          <ShimmerButton onClick={() => editor.open()} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-11 px-5 font-semibold"><PhoneCall className="mr-2 size-4" aria-hidden="true" />Atur nomor sales</ShimmerButton>
-        </> : undefined} />
+        actions={<>
+          {tracked.length > 0 && <Button variant="secondary" isPending={downloading === 'all'} isDisabled={!!downloading} onPress={() => download()}><Download className="size-4" aria-hidden="true" />Download semua listing sales</Button>}
+          {canEdit && <><Button variant="secondary" isPending={snapshotBusy} isDisabled={!tracked.length} onPress={snapshot}><ClipboardList className="size-4" aria-hidden="true" />Catat sekarang</Button>
+          <ShimmerButton onClick={() => editor.open()} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-11 px-5 font-semibold"><PhoneCall className="mr-2 size-4" aria-hidden="true" />Atur nomor sales</ShimmerButton></>}
+        </>} />
 
       <ErrorNotice message={overview.error} onRetry={overview.reload} />
       {overview.loading && !overview.data && <LoadingRows rows={3} />}
@@ -95,7 +113,7 @@ export default function StockPage(_props: { navigate?: Navigate }) {
 
           <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
             {tracked.map((item, index) => (
-              <BlurFade key={item.phone} delay={0.05 * index}><SalesCard item={item} onOpen={() => { setViewing(item); listings.open(); }} /></BlurFade>
+              <BlurFade key={item.phone} delay={0.05 * index}><SalesCard item={item} onOpen={() => { setViewing(item); listings.open(); }} onDownload={() => download(item)} downloading={downloading === item.phone} busy={!!downloading} /></BlurFade>
             ))}
           </div>
 
@@ -146,7 +164,7 @@ function Delta({ value }: { value: number }) {
   return <span className={cn('rounded-full px-1.5 py-0.5 text-sm font-bold', value > 0 ? 'bg-success-soft text-success-soft-foreground' : 'bg-danger-soft text-danger-soft-foreground')}>{value > 0 ? '+' : '−'}{Math.abs(value)}</span>;
 }
 
-function SalesCard({ item, onOpen }: { item: StockTracked; onOpen: () => void }) {
+function SalesCard({ item, onOpen, onDownload, downloading, busy }: { item: StockTracked; onOpen: () => void; onDownload: () => void; downloading: boolean; busy: boolean }) {
   const name = salesName(item);
   const history = item.history.map((point) => point.ready);
   return (
@@ -162,7 +180,10 @@ function SalesCard({ item, onOpen }: { item: StockTracked; onOpen: () => void })
       </dl>
       <p className="mt-3 text-base text-muted">{item.new_7d > 0 ? <><strong className="text-foreground">+{item.new_7d}</strong> listing baru dalam 7 hari</> : 'Tidak ada listing baru dalam 7 hari'}{item.last_posted_at ? ` · posting terakhir ${relativeDate(item.last_posted_at)}` : ''}</p>
       <div className="mt-3 flex-1"><p className="mb-1 text-sm font-semibold text-muted">Perkembangan stok ready</p><Sparkline values={history} className="h-16" color={colors.green} /></div>
-      <Button variant="secondary" fullWidth className="mt-4" onPress={onOpen}>Lihat listing sales ini</Button>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <Button variant="secondary" fullWidth onPress={onOpen}>Lihat listing sales ini</Button>
+        <Button variant="secondary" fullWidth isPending={downloading} isDisabled={busy} onPress={onDownload}><Download className="size-4" aria-hidden="true" />Download Excel</Button>
+      </div>
     </article>
   );
 }
