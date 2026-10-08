@@ -47,6 +47,11 @@ export function useApi() {
         if (!response.ok) await readResponse(response);
         return response.blob();
       },
+      file: async (path: string) => {
+        const response = await workspaceFetch(path);
+        if (!response.ok) await readResponse(response);
+        return response.blob();
+      },
     };
   }, [workspaceFetch]);
 }

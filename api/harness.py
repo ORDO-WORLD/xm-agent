@@ -87,7 +87,7 @@ class ServerTestCase(unittest.TestCase):
         with response:
             data = response.read()
             self.assertEqual(response.status, status, (path, data[:600]))
-            if 'application/pdf' in response.headers.get('Content-Type', ''):
+            if response.headers.get('Content-Type', '').startswith(('application/pdf', 'application/vnd.openxmlformats')):
                 return data
             return json.loads(data) if data else None
 

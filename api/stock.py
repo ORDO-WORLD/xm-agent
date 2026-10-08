@@ -4,11 +4,12 @@ A listing "belongs" to a sales when the number appears in the signature of its
 bubble. The tracked numbers are a company-level setting; counts are recorded
 automatically after every import and whenever a listing changes status.
 """
+import io
 import re
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from auth import current_user
@@ -204,3 +205,78 @@ def stock_log(phone: str = '', date_from: str = '', date_to: str = '', limit: in
                WHERE ''' + ' AND '.join(clauses) + ' ORDER BY l.logged_at DESC, l.id DESC LIMIT %s OFFSET %s',
             params + [limit + 1, max(0, offset)]).fetchall()
     return {'rows': rows[:limit], 'has_more': len(rows) > limit}
+
+
+def display_phone(phone):
+    """``6287852258118`` -> ``+62 878-5225-8118``, the way the app shows numbers."""
+    national = phone[2:] if phone.startswith('62') else phone.lstrip('0')
+    return '+62 ' + '-'.join(part for part in (national[:3], national[3:7], national[7:]) if part)
+
+
+def clean_contact_name(name):
+    """Drop a leading "Contact:" / "Hubungi" style prefix captured with the signature name."""
+    return re.sub(r'^\s*(?:info\s+lanjut|informasi|contact(?:\s+person)?|kontak|hubungi|marketing|call|wa)\s*[:：\-–]?\s*', '',
+                  name or '', flags=re.I).lstrip('~ ').strip()
+
+
+def export_rows(conn, company_id, phones):
+    """Every listing of the given sales numbers, as the "Lihat listing sales ini" window shows them:
+    ready, on-hold and sold, any match status, identical texts once, newest first."""
+    return conn.execute(
+        '''SELECT phone, raw_text, sent_at FROM (
+             SELECT DISTINCT ON (p.ord, r.raw_text) p.ord, p.phone, r.raw_text, r.sent_at, d.id
+             FROM unnest(%s::text[]) WITH ORDINALITY AS p(phone, ord)
+             JOIN xm.documents d ON d.company_id = %s AND d.document_type = 'property_listing' AND d.active
+                  AND (d.contact_phones @> ARRAY[p.phone] OR d.contact_phone = p.phone)
+             JOIN xm.entities e ON e.entity_id = d.entity_id AND e.status <> 'deleted'
+             JOIN xm.raw_messages r ON r.id = d.raw_message_id
+             ORDER BY p.ord, r.raw_text, r.sent_at DESC NULLS LAST, d.id) listing
+           ORDER BY ord, sent_at DESC NULLS LAST, id''', (phones, company_id)).fetchall()
+
+
+def build_workbook(rows, names):
+    from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+    from openpyxl.styles import Alignment, Font
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = 'Listing per Sales'
+    sheet.append(['Nama', 'No telp', 'Tanggal', 'Baca pesan asli'])
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for row in rows:
+        # Excel rejects control characters and caps a cell at 32,767 characters.
+        text = ILLEGAL_CHARACTERS_RE.sub('', row['raw_text'] or '')[:32767]
+        sheet.append([names[row['phone']], display_phone(row['phone']), row['sent_at'], text])
+        line = sheet.max_row
+        sheet.cell(line, 3).number_format = 'dd/mm/yyyy hh:mm'
+        message = sheet.cell(line, 4)
+        message.data_type = 's'  # a message starting with "=" is text, never a formula
+        message.alignment = Alignment(wrap_text=True, vertical='top')
+        for column in (1, 2, 3):
+            sheet.cell(line, column).alignment = Alignment(vertical='top')
+    for column, width in zip('ABCD', (24, 20, 18, 90)):
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = 'A2'
+    sheet.auto_filter.ref = sheet.dimensions
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+@router.get('/export')
+def export_listings(phone: str = ''):
+    """Excel of the listings of every tracked sales, or of one of them when ``phone`` is given."""
+    company_id = workspace_id()
+    with connect() as conn:
+        tracked = _overview(conn, company_id)['tracked']
+        if phone.strip():
+            wanted = normalize_phone(phone)
+            tracked = [item for item in tracked if item['phone'] == wanted]
+            if not tracked:
+                raise HTTPException(404, 'Nomor sales ini tidak dipantau.')
+        names = {item['phone']: item['label'] or clean_contact_name(item['contact_name']) or 'Sales' for item in tracked}
+        rows = export_rows(conn, company_id, list(names))
+    return Response(build_workbook(rows, names), media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    headers={'Content-Disposition': 'attachment; filename="stok-listing-sales.xlsx"'})
