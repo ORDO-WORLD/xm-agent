@@ -262,7 +262,7 @@ def _migrate_company(conn, company_id: str):
         (company_id,))
     conn.execute(
         '''UPDATE xm.app_preferences ap SET company_name = coalesce(
-              (SELECT CASE WHEN ap.company_id = 'xm' THEN 'Xavier Marks' ELSE u.display_name END
+              (SELECT CASE WHEN ap.company_id = 'xm' THEN 'Property' ELSE u.display_name END
                FROM xm.users u WHERE u.workspace_id = ap.company_id ORDER BY u.created_at LIMIT 1),
               ap.company_id)
            WHERE ap.company_id = %s AND ap.company_name IS NULL''', (company_id,))

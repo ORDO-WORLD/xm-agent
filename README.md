@@ -1,6 +1,6 @@
 # XM Auto Audit — v4.0
 
-Local property matchmaking workspace for Xavier Marks. It imports WhatsApp `cleaned.json` files per agent, parses each message with deterministic Python rules, stores structured records in PostgreSQL schema `xm`, indexes searchable content in Qdrant collection `xm_rag`, and exposes the results to Hermes Agent.
+Local property matchmaking workspace for Property. It imports WhatsApp `cleaned.json` files per agent, parses each message with deterministic Python rules, stores structured records in PostgreSQL schema `xm`, indexes searchable content in Qdrant collection `xm_rag`, and exposes the results to Hermes Agent.
 
 ## Pembaruan v4.0
 

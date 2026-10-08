@@ -86,7 +86,7 @@ function CreateCompany({ state, onDone }: { state: ReturnType<typeof useOverlayS
         <Modal.Header><Modal.Heading>Tambah company baru</Modal.Heading></Modal.Header>
         <Modal.Body className="space-y-4">
           <Notice status="accent">Company baru mulai kosong dan terpisah dari yang lain. Akun pertama otomatis menjadi super admin company itu.</Notice>
-          <TextField value={name} onChange={setName} isRequired fullWidth><Label className="text-base font-bold">Nama company</Label><Input className="h-12 text-base" placeholder="mis. Xavier Marks Citraland" maxLength={120} /></TextField>
+          <TextField value={name} onChange={setName} isRequired fullWidth><Label className="text-base font-bold">Nama company</Label><Input className="h-12 text-base" placeholder="mis. Property Citraland" maxLength={120} /></TextField>
           <TextField value={adminName} onChange={setAdminName} isRequired fullWidth><Label className="text-base font-bold">Nama super admin</Label><Input className="h-12 text-base" maxLength={100} /></TextField>
           <TextField value={email} onChange={setEmail} isRequired type="email" fullWidth><Label className="text-base font-bold">Email super admin</Label><Input className="h-12 text-base" autoComplete="off" /></TextField>
           <TextField value={password} onChange={setPassword} isRequired fullWidth>

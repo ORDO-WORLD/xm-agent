@@ -51,7 +51,7 @@ export function LoginScreen({ onLogin, offline }: { onLogin: (user: User) => voi
         <DotPattern className="text-white/20 [mask-image:radial-gradient(520px_circle_at_center,white,transparent)]" width={22} height={22} />
         <div className="relative">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand-auto-audit.png" alt="Xavier Marks Auto Audit" width={1024} height={418} className="h-14 w-auto rounded-2xl bg-white px-4 py-2" />
+          <img src="/brand-auto-audit.png" alt="Property Auto Audit" width={1024} height={418} className="h-14 w-auto rounded-2xl bg-white px-4 py-2" />
         </div>
         <div className="relative max-w-xl">
           <BlurFade delay={0.1}>
@@ -70,7 +70,7 @@ export function LoginScreen({ onLogin, offline }: { onLogin: (user: User) => voi
           </ul>
         </div>
         <div className="relative flex items-end justify-between">
-          <p className="text-sm text-blue-200/70">© Xavier Marks · Auto Audit</p>
+          <p className="text-sm text-blue-200/70">© Property · Auto Audit</p>
           <div className="absolute right-0 bottom-0 w-44 translate-y-6 opacity-95"><LottiePlayer name="searching" /></div>
         </div>
         <Ripple mainCircleSize={260} mainCircleOpacity={0.12} numCircles={5} className="[&>div]:border-white/30 [&>div]:bg-white/5" />
@@ -80,7 +80,7 @@ export function LoginScreen({ onLogin, offline }: { onLogin: (user: User) => voi
         {/* Phone: a compact brand header instead of the big panel */}
         <div className="mb-6 flex w-full max-w-md flex-col items-center text-center lg:hidden">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand-auto-audit.png" alt="Xavier Marks Auto Audit" width={1024} height={418} className="h-14 w-auto" />
+          <img src="/brand-auto-audit.png" alt="Property Auto Audit" width={1024} height={418} className="h-14 w-auto" />
           <p className="mt-3 text-base text-muted">Pencocokan buyer dan properti, otomatis.</p>
         </div>
         <BlurFade className="w-full max-w-md">

@@ -33,7 +33,7 @@ function useNav() {
 
 function Logo({ className }: { className?: string }) {
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src="/brand-auto-audit.png" alt="Xavier Marks Auto Audit" width={1024} height={418} className={cn('h-10 w-auto object-contain', className)} />;
+  return <img src="/brand-auto-audit.png" alt="Property Auto Audit" width={1024} height={418} className={cn('h-10 w-auto object-contain', className)} />;
 }
 
 function NavLink({ item, active, onNavigate, compact }: { item: NavItem; active: boolean; onNavigate: (id: string) => void; compact?: boolean }) {

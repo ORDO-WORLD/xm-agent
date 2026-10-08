@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the small Lottie animations used by the interface (lib/lottie/*.json).
 
-They are drawn from primitives (circles, rounded boxes, paths) in the Xavier Marks
+They are drawn from primitives (circles, rounded boxes, paths) in the Property
 palette, so there is no third-party asset or licence to track. Re-run after editing:
 
     python3 scripts/generate-lottie.py
