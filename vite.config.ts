@@ -46,9 +46,18 @@ export default defineConfig(async () => {
 
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+      // In production nginx forwards /api to the Python service; do the same
+      // while developing. Point XM_API_URL at a development API.
+      proxy: {
+        '/api': {
+          target: process.env.XM_API_URL ?? 'http://127.0.0.1:8100',
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/api/, ''),
+        },
+      },
+    },
     plugins: [
       vinext(),
       sites(),

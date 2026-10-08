@@ -8,6 +8,8 @@ from db import connect
 from parser import normalize_phone
 from reindex import glossary_values
 from auth import current_user
+from company import company_row, effective_terms, personal_terms
+from entities import STATUSES
 from tenant import owner_id
 from search_terms import normalize_terms, search_filter
 
@@ -61,7 +63,7 @@ def get_glossary():
 
 class Preferences(BaseModel):
     direction: Literal['buyer', 'property'] = 'buyer'
-    statuses: list[Literal['hot', 'warm', 'unmatched']] = ['hot', 'warm', 'unmatched']
+    statuses: list[Literal['hot', 'warm', 'unmatched']] = ['hot', 'warm']
 
 
 @router.get('/preferences')
@@ -90,25 +92,90 @@ def save_preferences(payload: Preferences, request: Request):
 class SearchDefault(BaseModel):
     search: str = Field(default='', max_length=4020)
     terms: list[str] | None = Field(default=None, max_length=20)
+    locked: bool | None = None
+    # Explicitly use every message (no keyword filter). Never inferred from an empty list.
+    clear: bool = False
+
+
+def search_state(conn, role='admin', user_key=None):
+    """Keywords as one person experiences them, plus what they may change."""
+    company = company_row(conn)
+    mine = personal_terms(conn, user_key) if user_key else None
+    terms = effective_terms(role, company, mine)
+    return {'search': '\n'.join(terms), 'terms': terms, 'company_terms': list(company['search_terms']),
+            'personal_terms': mine, 'locked': company['search_locked'],
+            'can_edit_company': role in ('admin', 'company_admin'),
+            'can_edit_personal': role == 'user' and not company['search_locked']}
+
+
+def resolve_search(conn, request, search):
+    """A locked company makes every member search with the company keywords, whatever the client sends."""
+    if request is None:
+        return search
+    user = current_user(request)
+    if user and user['role'] == 'user':
+        company = company_row(conn)
+        if company['search_locked']:
+            return '\n'.join(company['search_terms'])
+    return search
 
 
 @router.get('/search-default')
-def get_search_default():
+def get_search_default(request: Request = None):
+    user = current_user(request) if request is not None else None
     with connect() as conn:
-        row = conn.execute("SELECT search_terms FROM xm.app_preferences WHERE company_id=current_setting('xm.workspace_id')").fetchone()
-    terms = row['search_terms'] if row else ['XM Darmo']
-    return {'search': '\n'.join(terms), 'terms': terms}
+        return search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
 
 
 @router.put('/search-default')
-def save_search_default(payload: SearchDefault):
+def save_search_default(payload: SearchDefault, request: Request = None):
+    terms = [] if payload.clear else normalize_terms(payload.terms if payload.terms is not None else payload.search)
+    if not terms and not payload.clear:
+        raise HTTPException(400, 'Default pencarian wajib diisi.')
+    user = current_user(request) if request is not None else None
+    with connect() as conn:
+        if payload.locked is None:
+            conn.execute("UPDATE xm.app_preferences SET search_terms=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')", (terms,))
+        else:
+            conn.execute("UPDATE xm.app_preferences SET search_terms=%s,search_locked=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')",
+                         (terms, payload.locked))
+        conn.commit()
+        return search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
+
+
+class PersonalSearch(BaseModel):
+    search: str = Field(default='', max_length=4020)
+    terms: list[str] | None = Field(default=None, max_length=20)
+
+
+@router.put('/search-default/personal')
+def save_personal_search(payload: PersonalSearch, request: Request):
+    user = current_user(request)
+    if user['role'] != 'user':
+        raise HTTPException(400, 'Super admin mengatur kata kunci company dari pengaturan company.')
     terms = normalize_terms(payload.terms if payload.terms is not None else payload.search)
     if not terms:
-        raise HTTPException(400, 'Default pencarian wajib diisi.')
+        raise HTTPException(400, 'Isi minimal satu kata kunci.')
     with connect() as conn:
-        conn.execute("UPDATE xm.app_preferences SET search_terms=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')", (terms,))
+        if company_row(conn)['search_locked']:
+            raise HTTPException(403, 'Kata kunci dikunci oleh super admin company.')
+        key = owner_id() or user['id']
+        conn.execute(
+            '''INSERT INTO xm.user_preferences(user_id, preferences) VALUES(%s,%s::jsonb)
+               ON CONFLICT(user_id) DO UPDATE SET preferences=xm.user_preferences.preferences || excluded.preferences, updated_at=now()''',
+            (key, json.dumps({'search_terms': terms})))
         conn.commit()
-    return {'search': '\n'.join(terms), 'terms': terms}
+        return search_state(conn, user['role'], key)
+
+
+@router.delete('/search-default/personal')
+def reset_personal_search(request: Request):
+    user = current_user(request)
+    key = owner_id() or user['id']
+    with connect() as conn:
+        conn.execute("UPDATE xm.user_preferences SET preferences=preferences - 'search_terms', updated_at=now() WHERE user_id=%s", (key,))
+        conn.commit()
+        return search_state(conn, user['role'], key)
 
 
 @router.put('/glossary')
@@ -173,11 +240,11 @@ def workspace_dates(direction: Literal['buyer','property']='buyer', date_from: s
     with connect() as conn:
         import workspace_cache
         if workspace_cache.ready(conn):
-            latest=conn.execute("SELECT max(last_seen_at)::date latest_date FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type=%s",(kind,)).fetchone()
+            latest=conn.execute("SELECT max(last_seen_at)::date latest_date FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type=%s AND status='ready'",(kind,)).fetchone()
             rows=conn.execute('''SELECT r.sent_at::date posted_day,count(DISTINCT gm.group_id) count
               FROM xm.document_group_members gm JOIN xm.document_groups g ON g.group_id=gm.group_id
               JOIN xm.documents d ON d.id=gm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
-              WHERE g.company_id=current_setting('xm.workspace_id') AND g.document_type=%s AND r.sent_at >= %s AND r.sent_at < %s
+              WHERE g.company_id=current_setting('xm.workspace_id') AND g.document_type=%s AND g.status='ready' AND r.sent_at >= %s AND r.sent_at < %s
               GROUP BY r.sent_at::date''',(kind,start,end)).fetchall()
             return {'counts':{str(row['posted_day'])[:10]:int(row['count']) for row in rows},
                     'latest_date':str(latest['latest_date'])[:10] if latest['latest_date'] else None}
@@ -192,13 +259,37 @@ def workspace_dates(direction: Literal['buyer','property']='buyer', date_from: s
             'latest_date': str(latest['latest_date'])[:10] if latest['latest_date'] else None}
 
 
+def stock_statuses(value):
+    """``ready,on_hold`` -> validated tuple; the default view only shows ready items."""
+    chosen = [item for item in dict.fromkeys(v.strip() for v in value.split(',')) if item]
+    if not chosen or any(item not in STATUSES for item in chosen):
+        raise HTTPException(400, 'Status listing/buyer tidak dikenal.')
+    return tuple(chosen)
+
+
+def attach_entities(conn, rows):
+    """Rows built without the group cache still need their public ID and status."""
+    ids = list({str(r['entity_id']) for r in rows if r.get('entity_id')})
+    if ids:
+        found = {str(e['entity_id']): e for e in conn.execute('SELECT entity_id, public_id, status FROM xm.entities WHERE entity_id=ANY(%s::uuid[])', (ids,)).fetchall()}
+        for r in rows:
+            entity = found.get(str(r.get('entity_id')))
+            if entity:
+                r['public_id'], r['entity_status'] = entity['public_id'], entity['status']
+    return rows
+
+
 @router.get('/workspace')
-def workspace(direction: Literal['buyer','property']='buyer', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', offset: int=0, time_from: str='00:00', time_to: str='23:59'):
+def workspace(direction: Literal['buyer','property']='buyer', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', offset: int=0, time_from: str='00:00', time_to: str='23:59', stock_status: str='ready', public_id: str='', group_by: str='', group_key: str | None=None, request: Request = None):
     import workspace_cache
     clause, date_params = date_filter(date_from,date_to,time_from,time_to)
+    chosen = stock_statuses(stock_status)
+    if group_by and (direction != 'property' or group_by not in ('sender','phone')):
+        raise HTTPException(400, 'Pengelompokan hanya untuk listing property: sender atau phone.')
     with connect() as conn:
+        search = resolve_search(conn, request, search)
         if workspace_cache.ready(conn):
-            return workspace_cache.sources(conn,direction,search,phones,statuses,clause,date_params,offset)
+            return workspace_cache.sources(conn,direction,search,phones,statuses,clause,date_params,offset,chosen,public_id,group_by or None,group_key)
     kind, relation = ('buyer_request','buyer_request_id') if direction=='buyer' else ('property_listing','property_listing_id')
     other = 'property_listing_id' if direction == 'buyer' else 'buyer_request_id'
     selected=set(statuses.split(','))
@@ -258,12 +349,30 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
     if not all_statuses:
         query+=' LIMIT 201 OFFSET %s'
     params.append(max(0,offset))
-    with connect() as conn: rows=conn.execute(query,params).fetchall()
+    with connect() as conn:
+        rows=attach_entities(conn,conn.execute(query,params).fetchall())
     return {'rows':rows[:200],'has_more':len(rows)>200}
+
+
+@router.get('/workspace/groups')
+def workspace_groups(group_by: str='', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', time_from: str='00:00', time_to: str='23:59', stock_status: str='ready', public_id: str='', group_search: str='', offset: int=0, request: Request = None):
+    """Listings grouped by message sender or by the phone number written in the bubble."""
+    import workspace_cache
+    clause, date_params = date_filter(date_from,date_to,time_from,time_to)
+    chosen = stock_statuses(stock_status)
+    with connect() as conn:
+        mode = group_by or company_row(conn)['listing_group_by']
+        if mode not in ('sender','phone'):
+            raise HTTPException(400, 'Pengelompokan tidak dikenal.')
+        search = resolve_search(conn, request, search)
+        if not workspace_cache.ready(conn):
+            return {'group_by': mode, 'groups': [], 'has_more': False}
+        return workspace_cache.group_summary(conn,'property',search,phones,statuses,clause,date_params,chosen,public_id,mode,group_search,offset=offset)
 
 class Batch(BaseModel):
     direction: Literal['buyer','property']='buyer'
     ids: list[uuid.UUID] = Field(max_length=50)
+    target_status: list[Literal['ready','on_hold','sold']] = ['ready']
 
 @router.post('/workspace/recommendations')
 def recommendations(payload: Batch):
@@ -272,7 +381,7 @@ def recommendations(payload: Batch):
     with connect() as conn:
         import workspace_cache
         if workspace_cache.ready(conn):
-            return workspace_cache.recommendations(conn,payload.direction,ids)
+            return workspace_cache.recommendations(conn,payload.direction,ids,tuple(payload.target_status) or ('ready',))
         sources=conn.execute('''SELECT d.*,r.raw_text,r.chat_name,r.sent_at FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''',(ids,kind)).fetchall()
         # Resolve all copies of a selected source; aggregate before rendering so
         # copies with different historic candidate edges do not lose matches.
@@ -288,6 +397,7 @@ def recommendations(payload: Batch):
           JOIN xm.documents d ON d.id=m.{other} JOIN xm.raw_messages r ON r.id=d.raw_message_id
           WHERE m.company_id=current_setting('xm.workspace_id') AND d.company_id=current_setting('xm.workspace_id') AND d.active AND m.score>=60
           ORDER BY m.score DESC,r.sent_at DESC NULLS LAST,d.id''',(ids,kind)).fetchall()
+        attach_entities(conn,sources); attach_entities(conn,rows)
     return {'groups':[{'source':s,'recommendations':group_identical([r for r in rows if r['source_id']==s['id']])} for s in sources]}
 
 

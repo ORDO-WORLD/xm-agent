@@ -1,6 +1,12 @@
-# XM Auto Audit — v3.1
+# XM Auto Audit — v4.0
 
 Local property matchmaking workspace for Xavier Marks. It imports WhatsApp `cleaned.json` files per agent, parses each message with deterministic Python rules, stores structured records in PostgreSQL schema `xm`, indexes searchable content in Qdrant collection `xm_rag`, and exposes the results to Hermes Agent.
+
+## Pembaruan v4.0
+
+Major update: ID publik untuk setiap listing dan buyer (`L-AB908`, `B-AB908`), status Ready / On-hold / Sold / Hapus, halaman **Match Terbaru** dengan riwayat tanggal, **Beranda** statistik yang dihitung Python, **Stok Sales** per nomor telepon, pengelompokan listing per pengirim atau nomor telepon, company dengan banyak akun (super admin dapat menambah akun dan mengunci kata kunci), serta tampilan baru yang lebih mudah dipakai di ponsel.
+
+Panduan lengkap, tabel peran, dan langkah upgrade: [docs/UPGRADE_V4.0.md](docs/UPGRADE_V4.0.md).
 
 ## Local endpoints
 
@@ -26,7 +32,7 @@ Local property matchmaking workspace for Xavier Marks. It imports WhatsApp `clea
 ## Matching workspace update
 
 - After login, choose Buyer → Property or Property → Buyer with all dates selected by default; optional Jakarta calendar presets include this month, this week (Monday–Sunday), last month, and a manual range before opening the matching workspace.
-- Both search directions use the admin-managed defaults for the selected user (initially `XM Darmo`). Admin can independently enter up to 20 phrases per account separated by newlines or commas; sources matching any phrase are included. User settings are read-only.
+- Both search directions use the company's keywords (company baru mulai tanpa saringan). Super admin dapat memasukkan sampai 20 frasa dipisah baris atau koma; sumber yang cocok dengan salah satu frasa dipakai. Super admin dapat **mengunci** kata kunci; bila tidak dikunci, setiap anggota boleh memakai daftarnya sendiri.
 - Select one source card to open its recommendations. On mobile, the source list and recommendations appear as separate views, with a back button to return to the list.
 - Property contacts support multiple Indonesian phone numbers separated by commas or newlines, normalized to `62`. Matching uses bubble contact details, including alternate numbers, independently of the uploading agent.
 - Hot: score ≥80 only after recognised mandatory constraints pass; uncertain evidence or tolerances cap at 79. Warm: 60–79; Belum cocok: no stored match ≥60. Unrequested factors contribute no points. Multiple status filters can be enabled together.
@@ -40,25 +46,32 @@ Local property matchmaking workspace for Xavier Marks. It imports WhatsApp `clea
 - Regression checks: `python3 -m unittest discover -s api -p 'test_*.py'`.
 - Existing local services remain at http://127.0.0.1:9004. The Python/PostgreSQL/Qdrant stack is hosted through Docker Compose; the starter `.openai/hosting.json` has no registered cloud Site.
 
-## Login
+## Login dan peran
 
-Default akun admin lokal: `admin@autoaudit.id` / `secret123`. Admin memiliki panel manajemen user (tambah akun, ubah nama/email/password, kunci/buka akun). User hanya dapat membaca pengaturan dan menjalankan pencocokan. Akun terkunci menampilkan layar kosong dengan latar blur dan tautan WhatsApp admin. Atur `XM_ADMIN_EMAIL` dan `XM_ADMIN_PASSWORD` sebelum pertama kali menjalankan instalasi lain. Password disimpan sebagai PBKDF2 hash dan sesi login berlaku tujuh hari.
+Default akun administrator platform lokal: `admin@autoaudit.id` / `secret123` (ganti lewat `XM_ADMIN_EMAIL` dan `XM_ADMIN_PASSWORD` sebelum instalasi pertama, lalu ganti password dari **Pengaturan → Akun saya**). Password disimpan sebagai PBKDF2 hash dan sesi login berlaku tujuh hari.
+
+Tiga peran:
+
+- **Administrator platform** (`admin`): membuat company, masuk ke company mana pun dari menu **Perusahaan**, dan mengangkat super admin.
+- **Super admin company** (`company_admin`): menambah, mengunci, dan mereset akun anggota; mengunggah data; mengatur kata kunci (dan mengunci kata kunci), pengelompokan listing, nomor sales, toleransi, bobot, glosarium, dan indeks lokasi.
+- **Anggota** (`user`): mencocokkan, menandai status, mengunduh PDF, dan melihat Beranda, Match Terbaru, serta Stok Sales.
+
+Akun terkunci menampilkan layar kosong dengan latar blur dan tautan WhatsApp admin. Hak akses ditegakkan di server pada setiap permintaan.
 
 ## Backup lengkap
 
 Gunakan `scripts/backup-data.sh` untuk membuat dump PostgreSQL, snapshot Qdrant `xm_rag`, serta arsip file sumber. Panduan pemulihan tersedia di `docs/BACKUP_RESTORE.md`. Backup data sengaja tidak dilacak Git karena berisi percakapan dan nomor kontak.
 
-## Upgrade v3.1
+## Upgrade
 
-Release tag: `XM-V3.1`. See [docs/UPGRADE_V3.1.md](docs/UPGRADE_V3.1.md) for updating an existing installation while preserving its data.
+Versi sekarang: `4.0.0`. Lihat [docs/UPGRADE_V4.0.md](docs/UPGRADE_V4.0.md) untuk memperbarui instalasi berjalan tanpa kehilangan data. Catatan versi sebelumnya: [v3.1](docs/UPGRADE_V3.1.md), [v3.0](docs/UPGRADE_V3.0.md).
 
 
-## Admin and mobile update
+## Admin and mobile update (v3.0, diperbarui di v4.0)
 
-- Migration adds `role` and `is_locked` to existing users without replacing matching data. The configured bootstrap admin is promoted once and receives the configured password (default `secret123`); subsequent restarts preserve the password and active sessions. Other existing accounts become standard users.
-- Admin manages the team from **Panel Admin**. Select **Kelola**, edit the user, and save; password changes and email changes revoke that user's sessions. Lock changes take effect on the next API request; the UI checks account state every 5 seconds and on window focus.
-- Only admins may change the selected account’s settings, imports, glossary, location index, and recomputation. Locked accounts may only inspect their session and log out. Settings access is enforced on the API, including direct requests.
-- The legacy admin workspace preserves its existing search defaults. New accounts start with independent default settings and an empty data workspace. Configure multiple phrases from **Pengaturan → Pencocokan**; the examples are not automatically added to live settings.
+- Migration adds `role` and `is_locked` to existing users without replacing matching data. The configured bootstrap admin is promoted once and receives the configured password; subsequent restarts preserve the password and active sessions.
+- Akun dikelola dari **Tim & Akses** (super admin company) atau **Perusahaan** (administrator platform). Password dan email yang diubah mencabut sesi akun itu. Kunci akun berlaku pada permintaan berikutnya; UI memeriksa status akun tiap 5 detik dan saat jendela difokuskan.
+- Hanya super admin (dan administrator platform) yang dapat mengubah pengaturan company, upload, glosarium, indeks lokasi, dan penghitungan ulang. Akun terkunci hanya dapat melihat sesinya dan keluar. Hak akses ditegakkan di API, termasuk untuk permintaan langsung.
 
 
 ## Isolated user workspaces
@@ -67,7 +80,7 @@ From **Panel Admin**, choose **Data & setting** on an account. The settings draw
 
 Admin requests carry a selected user ID, checked against the authenticated role on the server. Each request and worker job gets its own workspace context. PostgreSQL queries, uploaded-file directories, Qdrant searches/payloads, result caches, calendar counts, exports, and maintenance jobs are scoped to that workspace. A normal user cannot switch owner by changing a request header or submitting another account's document ID. The selected workspace stays local to the browser view, so admin tabs can manage different users independently.
 
-The existing archive and its settings remain in the admin workspace; nothing is automatically copied to a new user. Upload the appropriate source JSON and location data from that user's **Data & setting** panel. Schema upgrades preserve existing records and add ownership for accounts, glossary entries, and jobs.
+The existing archive and its settings remain in the admin workspace; nothing is automatically copied to a new company. Upload the appropriate source JSON and location data from that company's **Unggah Data** and **Pengaturan** pages. Schema upgrades preserve existing records and add ownership for accounts, glossary entries, and jobs.
 
 `api/test_user_isolation.py` exercises real HTTP requests against a disposable PostgreSQL database: identical uploads in different accounts, settings/glossary/location independence, forbidden owner switches and foreign document IDs, cached and uncached results, exports, worker ownership, reindexing, and concurrent requests. Run the regression suite with `XM_TEST_DATABASE_URL` pointing only to an isolated test database.
 

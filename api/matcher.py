@@ -7,6 +7,7 @@ from embedding import embed
 from qdrant import query as qdrant_query
 from matching_rules import assess_pair, prepare_document
 from workspace_cache import refresh_workspace_cache
+from matchlog import log_matches
 from location_index import load_index
 
 
@@ -16,13 +17,20 @@ def _near_duplicate(left_tokens: set[str], right_tokens: set[str]) -> bool:
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) >= 0.70
 
 
-def recompute_matches(company_id: str | None = None, limit_per_request: int | None = None) -> int:
+def recompute_matches(company_id: str | None = None, limit_per_request: int | None = None, *,
+                      source: str = 'recompute', import_id=None, agent_name: str | None = None) -> int:
+    """Rebuild every match of a workspace.
+
+    ``source='import'`` marks a rebuild caused by new chat data: pairs that were
+    never seen before are then recorded as *new matches* for the history view.
+    Settings-driven rebuilds only refresh the baseline.
+    """
     company_id = company_id or workspace_id()
     with workspace_scope(company_id):
-        return _recompute_matches(company_id, limit_per_request)
+        return _recompute_matches(company_id, limit_per_request, source, import_id, agent_name)
 
 
-def _recompute_matches(company_id, limit_per_request):
+def _recompute_matches(company_id, limit_per_request, source='recompute', import_id=None, agent_name=None):
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042026))")
         settings = conn.execute(
@@ -125,9 +133,13 @@ def _recompute_matches(company_id, limit_per_request):
         if pending:
             with conn.cursor() as cur: cur.executemany(insert_sql,pending)
         refresh_workspace_cache(conn,company_id)
+        found = log_matches(conn, company_id, source, import_id, agent_name)
+        if source == 'import':
+            import stock
+            stock.snapshot_stock(conn, company_id, 'import', import_id=import_id, agent_name=agent_name)
         conn.execute(
             "INSERT INTO xm.audit_events(event_type, entity_type, details) VALUES ('matching_completed','match',%s::jsonb)",
-            (json.dumps({"matches": inserted, "requests": len(requests), "listings": len(listings)}),),
+            (json.dumps({"matches": inserted, "requests": len(requests), "listings": len(listings), "new_matches": found['new'], "source": source}),),
         )
         conn.commit()
         return inserted

@@ -114,6 +114,7 @@ def build_report(pairs, direction):
         pdf.drawRightString(right, PAGE_HEIGHT - 55, f'Pilihan {index} / {len(pairs)}')
         pdf.setStrokeColor(HexColor('#dbe3ef'))
         pdf.line(MARGIN, PAGE_HEIGHT - 85, right, PAGE_HEIGHT - 85)
+        ids = [source.get('public_id'), target.get('public_id') if target else None]
         texts = [source.get('raw_text') or source.get('normalized_text', ''),
                  (target.get('raw_text') or target.get('normalized_text', '')) if target else 'Belum ada kecocokan.']
         for col, x in enumerate([MARGIN, MARGIN + COLUMN_WIDTH + COLUMN_GAP]):
@@ -122,7 +123,8 @@ def build_report(pairs, direction):
             pdf.roundRect(x, label_y, COLUMN_WIDTH, 32, 6, fill=1, stroke=0)
             pdf.setFillColor(HexColor('#1645a0'))
             pdf.setFont('Helvetica-Bold', 11)
-            pdf.drawString(x + 12, label_y + 11, labels[col])
+            title = labels[col] + (' | ' + ids[col] if ids[col] else '')
+            pdf.drawString(x + 12, label_y + 11, title)
             paragraph, used_height = fit_paragraph(texts[col])
             paragraph.drawOn(pdf, x + 12, BODY_TOP - used_height)
 

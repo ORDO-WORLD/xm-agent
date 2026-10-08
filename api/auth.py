@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
-from psycopg.errors import UniqueViolation
 
 from db import connect
 from tenant import provision_workspace
@@ -65,6 +64,10 @@ def seed_admin() -> None:
 
 
 def current_user(request: Request):
+    # The access middleware already resolved the account for this request.
+    cached = getattr(request.state, 'xm_user', None)
+    if cached is not None:
+        return cached
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return None
@@ -72,8 +75,9 @@ def current_user(request: Request):
     with connect() as conn:
         return conn.execute(
             """
-            SELECT u.id, u.email, u.display_name, u.role, u.is_locked, u.workspace_id
+            SELECT u.id, u.email, u.display_name, u.role, u.is_locked, u.workspace_id, ap.company_name
             FROM xm.sessions s JOIN xm.users u ON u.id=s.user_id
+            LEFT JOIN xm.app_preferences ap ON ap.company_id=u.workspace_id
             WHERE s.token_hash=%s AND s.expires_at > now()
             """,
             (token_hash,),
@@ -84,7 +88,9 @@ def current_user(request: Request):
 def login(payload: LoginRequest, response: Response):
     email = payload.email.strip().lower()
     with connect() as conn:
-        user = conn.execute("SELECT * FROM xm.users WHERE email=%s", (email,)).fetchone()
+        user = conn.execute(
+            """SELECT u.*, ap.company_name FROM xm.users u
+               LEFT JOIN xm.app_preferences ap ON ap.company_id=u.workspace_id WHERE u.email=%s""", (email,)).fetchone()
         if not user or not _password_matches(payload.password, user["password_hash"]):
             raise HTTPException(401, "Email atau password tidak sesuai")
         token = secrets.token_urlsafe(32)
@@ -130,62 +136,24 @@ def logout(request: Request, response: Response):
 
 
 def public_user(user):
-    return {key: user[key] for key in ('id', 'email', 'display_name', 'role', 'is_locked')}
+    return {key: user.get(key) for key in ('id', 'email', 'display_name', 'role', 'is_locked', 'company_name')}
 
 
-class CreateUser(BaseModel):
-    email: EmailStr
-    display_name: str = Field(min_length=1, max_length=100)
-    password: str = Field(min_length=8, max_length=200)
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
 
 
-class UpdateUser(BaseModel):
-    email: EmailStr
-    display_name: str = Field(min_length=1, max_length=100)
-    password: str | None = Field(default=None, min_length=8, max_length=200)
-    is_locked: bool = False
-
-
-@router.get('/users')
-def list_users():
+@router.put('/password', status_code=204)
+def change_password(payload: PasswordChange, request: Request):
+    user = current_user(request)
     with connect() as conn:
-        return conn.execute('SELECT id,email,display_name,role,is_locked,created_at FROM xm.users ORDER BY created_at').fetchall()
-
-
-@router.post('/users', status_code=201)
-def create_user(payload: CreateUser):
-    if not payload.display_name.strip():
-        raise HTTPException(400, 'Nama wajib diisi')
-    try:
-        with connect() as conn:
-            user = conn.execute("""INSERT INTO xm.users(id,email,display_name,password_hash)
-                VALUES(%s,%s,%s,%s) RETURNING *""",
-                (uuid.uuid4(), payload.email.strip().lower(), payload.display_name.strip(), _password_hash(payload.password))).fetchone()
-            provision_workspace(conn, user['id'])
-            conn.commit()
-            return public_user(user)
-    except UniqueViolation:
-        raise HTTPException(409, 'Email sudah terdaftar')
-
-
-@router.put('/users/{user_id}')
-def update_user(user_id: uuid.UUID, payload: UpdateUser):
-    if not payload.display_name.strip():
-        raise HTTPException(400, 'Nama wajib diisi')
-    try:
-        with connect() as conn:
-            user = conn.execute('SELECT * FROM xm.users WHERE id=%s FOR UPDATE', (user_id,)).fetchone()
-            if not user:
-                raise HTTPException(404, 'Akun tidak ditemukan')
-            if user['role'] == 'admin':
-                raise HTTPException(400, 'Akun administrator utama tidak dapat diubah melalui manajemen user')
-            email = payload.email.strip().lower()
-            updated = conn.execute("""UPDATE xm.users SET email=%s,display_name=%s,is_locked=%s,password_hash=%s
-                WHERE id=%s RETURNING *""", (email, payload.display_name.strip(), payload.is_locked,
-                _password_hash(payload.password) if payload.password else user['password_hash'], user_id)).fetchone()
-            if payload.password or email != user['email']:
-                conn.execute('DELETE FROM xm.sessions WHERE user_id=%s', (user_id,))
-            conn.commit()
-            return public_user(updated)
-    except UniqueViolation:
-        raise HTTPException(409, 'Email sudah terdaftar')
+        row = conn.execute('SELECT password_hash FROM xm.users WHERE id=%s FOR UPDATE', (user['id'],)).fetchone()
+        if not row or not _password_matches(payload.current_password, row['password_hash']):
+            raise HTTPException(400, 'Password saat ini tidak sesuai')
+        conn.execute('UPDATE xm.users SET password_hash=%s WHERE id=%s', (_password_hash(payload.new_password), user['id']))
+        token = request.cookies.get(COOKIE_NAME) or ''
+        # Other devices must sign in again with the new password; this session continues.
+        conn.execute('DELETE FROM xm.sessions WHERE user_id=%s AND token_hash<>%s',
+                     (user['id'], hashlib.sha256(token.encode()).hexdigest()))
+        conn.commit()

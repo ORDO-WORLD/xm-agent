@@ -35,3 +35,13 @@ def provision_workspace(conn, user_id, legacy=False):
     conn.execute('INSERT INTO xm.match_settings(company_id) VALUES(%s) ON CONFLICT DO NOTHING', (workspace,))
     conn.execute('INSERT INTO xm.app_preferences(company_id) VALUES(%s) ON CONFLICT DO NOTHING', (workspace,))
     return workspace
+
+
+def provision_company(conn, company_id, name=None):
+    """Create the shared settings rows of a company workspace (idempotent)."""
+    conn.execute('INSERT INTO xm.match_settings(company_id) VALUES(%s) ON CONFLICT DO NOTHING', (company_id,))
+    # A new company starts without a keyword filter (every message counts) until its super admin sets one.
+    conn.execute("INSERT INTO xm.app_preferences(company_id, company_name, search_terms) VALUES(%s,%s,'{}') ON CONFLICT DO NOTHING", (company_id, name))
+    if name:
+        conn.execute('UPDATE xm.app_preferences SET company_name=%s WHERE company_id=%s AND company_name IS NULL', (name, company_id))
+    return company_id

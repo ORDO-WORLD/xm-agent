@@ -1,124 +1,23 @@
 """Real HTTP + PostgreSQL isolation regressions (never runs against production)."""
 import concurrent.futures
-import http.cookiejar
 import json
-import os
-from pathlib import Path
-import socket
-import tempfile
-import threading
-import time
 import unittest
-import urllib.error
-import urllib.request
 import uuid
 from unittest.mock import patch
 
+from harness import ServerTestCase
 
-@unittest.skipUnless(os.getenv('XM_TEST_DATABASE_URL'), 'requires isolated XM_TEST_DATABASE_URL')
-class UserIsolationHTTPTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        import app
-        import uvicorn
-        cls.temp = tempfile.TemporaryDirectory()
-        cls.patches = [
-            patch.dict(os.environ, {'DATABASE_URL': os.environ['XM_TEST_DATABASE_URL'],
-                       'XM_ADMIN_EMAIL': 'isolation-admin@example.com', 'XM_ADMIN_PASSWORD': 'isolation-admin-pass'}),
-            patch.object(app, 'UPLOAD_DIR', Path(cls.temp.name)),
-            patch.object(app, 'ensure_collection', lambda: None),
-            patch.object(app, 'qdrant_status', lambda **kwargs: {'ok': True}),
-            patch.object(app, 'qdrant_query', lambda *args, **kwargs: []),
-        ]
-        for item in cls.patches: item.start()
-        with socket.socket() as sock:
-            sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
-        cls.base = f'http://127.0.0.1:{port}'
-        cls.server = uvicorn.Server(uvicorn.Config(app.app, host='127.0.0.1', port=port, log_level='error'))
-        cls.thread = threading.Thread(target=cls.server.run, daemon=True)
-        cls.thread.start()
-        deadline = time.monotonic() + 15
-        while not cls.server.started and cls.thread.is_alive() and time.monotonic() < deadline:
-            time.sleep(.02)
-        if not cls.server.started: raise RuntimeError('Test server did not start')
 
-    @classmethod
-    def tearDownClass(cls):
-        from db import connect
-        cls.server.should_exit = True
-        cls.thread.join(10)
-        with connect() as conn:
-            conn.execute("DELETE FROM xm.users WHERE email='isolation-admin@example.com'")
-            conn.commit()
-        for item in reversed(cls.patches): item.stop()
-        cls.temp.cleanup()
-
-    def client(self, email, password):
-        client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
-        self.call(client, '/auth/login', 'POST', {'email': email, 'password': password})
-        return client
-
-    def call(self, client, path, method='GET', payload=None, owner=None, status=200, raw=None, content_type=None):
-        headers = {'Content-Type': content_type or 'application/json'}
-        if owner: headers['X-XM-User-Id'] = str(owner['id'] if isinstance(owner, dict) else owner)
-        body = raw if raw is not None else (json.dumps(payload).encode() if payload is not None else None)
-        req = urllib.request.Request(self.base + path, data=body, method=method, headers=headers)
-        try:
-            response = client.open(req, timeout=20)
-        except urllib.error.HTTPError as exc:
-            response = exc
-        with response:
-            data = response.read()
-            self.assertEqual(response.status, status, (path, data[:500]))
-            if 'application/pdf' in response.headers.get('Content-Type', ''): return data
-            return json.loads(data) if data else None
+class UserIsolationHTTPTests(ServerTestCase):
+    """Two companies must never see, change or infer each other's data."""
 
     def setUp(self):
-        from db import connect
-        self.admin = self.client('isolation-admin@example.com', 'isolation-admin-pass')
-        self.accounts = []
-        for label in ('A', 'B'):
-            user = self.call(self.admin, '/auth/users', 'POST', {'email': f'isol-{uuid.uuid4().hex}@example.com',
-                             'display_name': 'Isolation ' + label, 'password': 'isolation-user-pass'}, status=201)
-            with connect() as conn:
-                user['workspace_id'] = conn.execute('SELECT workspace_id FROM xm.users WHERE id=%s', (user['id'],)).fetchone()['workspace_id']
-            self.accounts.append(user)
-        self.a, self.b = self.accounts
-        self.ca = self.client(self.a['email'], 'isolation-user-pass')
-        self.cb = self.client(self.b['email'], 'isolation-user-pass')
-
-    def tearDown(self):
-        from db import connect
-        with connect() as conn:
-            for user in self.accounts:
-                scope = user['workspace_id']
-                for table in ('group_matches', 'document_group_members', 'document_groups', 'workspace_cache_state',
-                              'matches', 'documents', 'raw_messages', 'imports', 'maintenance_jobs', 'glossary',
-                              'location_indexes', 'match_settings', 'app_preferences', 'audit_events'):
-                    conn.execute(f'DELETE FROM xm.{table} WHERE company_id=%s', (scope,))
-                conn.execute('DELETE FROM xm.users WHERE id=%s', (user['id'],))
-            conn.commit()
-
-    def upload(self, owner, texts=None):
-        texts = texts or ['Buyer request rumah Surabaya Barat LT 100 Budget 2 M',
-                          'Dijual rumah Surabaya Barat LT 100 Harga 1,8 M']
-        data = json.dumps({'chats': {'room': {'name': 'Private chat', 'messages':
-                          [[f'2026-09-{index+1:02}T10:00:00', text, 'Private Agent'] for index, text in enumerate(texts)]}}})
-        boundary = 'xm-isolation-test-boundary'
-        raw = (f'--{boundary}\r\nContent-Disposition: form-data; name="agent_name"\r\n\r\nPrivate Agent\r\n'
-               f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="cleaned.json"\r\nContent-Type: application/json\r\n\r\n'
-               f'{data}\r\n--{boundary}--\r\n').encode()
-        return self.call(self.admin, '/imports', 'POST', owner=owner, raw=raw,
-                         content_type='multipart/form-data; boundary=' + boundary, status=202)
-
-    def process(self, job):
-        import ingest, matcher
-        points = []
-        def record(batch):
-            points.extend(batch); return len(batch)
-        with patch.object(ingest, 'upsert', record), patch.object(matcher, 'qdrant_query', lambda *args, **kwargs: []):
-            ingest.process_import(job['id'])
-        return points
+        super().setUp()
+        self.company_a, self.a, self.ca = self.make_company('A')
+        self.company_b, self.b, self.cb = self.make_company('B')
+        self.accounts = [self.a, self.b]
+        self.member_a, self.ma = self.make_member(self.ca, 'Member A')
+        self.member_b, self.mb = self.make_member(self.cb, 'Member B')
 
     def test_settings_glossary_preferences_and_forged_scope(self):
         for user, client, search, tolerance in [(self.a, self.ca, 'Alpha\nBravo', 3), (self.b, self.cb, 'Delta', 17)]:
@@ -140,7 +39,8 @@ class UserIsolationHTTPTests(unittest.TestCase):
         self.assertEqual(self.call(self.cb, '/preferences')['direction'], 'buyer')
         for path in ['/settings', '/glossary', '/documents', '/imports', '/workspace', '/agent/matches']:
             self.call(self.ca, path, owner=self.b, status=403)
-        self.call(self.ca, '/settings', 'PUT', {}, status=403)
+        self.call(self.ma, '/settings', 'PUT', {}, status=403)
+        self.call(self.mb, '/team/users', status=403)
         self.call(self.admin, '/settings', owner='invalid', status=400)
         self.call(self.admin, '/settings', owner=str(uuid.uuid4()), status=404)
         self.assertEqual(self.call(self.ca, '/settings', owner=self.a)['company_id'], self.a['workspace_id'])

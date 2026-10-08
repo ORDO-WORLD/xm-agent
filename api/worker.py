@@ -48,6 +48,8 @@ def process_maintenance():
 
 if __name__ == "__main__":
     ensure_schema()
+    from entities import migrate_v4
+    migrate_v4()
     with connect() as conn:
         conn.execute("UPDATE xm.maintenance_jobs SET status='queued' WHERE status='processing'")
         conn.commit()

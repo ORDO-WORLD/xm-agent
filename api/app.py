@@ -4,7 +4,6 @@ import os
 import shutil
 import uuid
 import time
-from threading import Lock
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -22,7 +21,10 @@ from parser import parse_message
 from qdrant import ensure_collection
 from qdrant import query as qdrant_query
 from qdrant import status as qdrant_status
+from access import PUBLIC_PATHS, SESSION_PATHS, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
+from entities import migrate_v4
+from runtime_cache import cached_stats
 
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
@@ -38,6 +40,7 @@ class BuyerBatchRequest(BaseModel):
 async def lifespan(_app: FastAPI):
     ensure_schema()
     seed_admin()
+    migrate_v4()
     try:
         ensure_collection()
     except Exception as exc:
@@ -45,7 +48,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="XM Auto Audit API", version="3.1.0", lifespan=lifespan)
+app = FastAPI(title="XM Auto Audit API", version="4.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:9004", "http://localhost:9004"],
@@ -58,20 +61,17 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
-    public_paths = {'/health', '/auth/login'}
-    if path not in public_paths:
+    if path not in PUBLIC_PATHS:
         user = current_user(request)
         if not user:
             return JSONResponse({'detail': 'Sesi login diperlukan'}, status_code=401)
-        if user['is_locked'] and path not in {'/auth/me', '/auth/logout'}:
+        if user['is_locked'] and path not in SESSION_PATHS:
             return JSONResponse({'detail': 'Akun terkunci. Hubungi admin untuk membuka.', 'code': 'account_locked'}, status_code=403)
-        user_actions = {('PUT', '/preferences'), ('POST', '/workspace/recommendations'),
-                        ('POST', '/export/pdf'), ('POST', '/buyers/recommendations/batch'),
-                        ('POST', '/auth/logout')}
-        admin_only = path.startswith('/auth/users') or (
-            request.method not in {'GET', 'HEAD', 'OPTIONS'} and (request.method, path) not in user_actions)
-        if admin_only and user['role'] != 'admin':
-            return JSONResponse({'detail': 'Hanya administrator yang dapat melakukan tindakan ini'}, status_code=403)
+        needed = required_role(request.method, path)
+        if not role_allows(user['role'], needed):
+            who = 'administrator platform' if needed == 'admin' else 'super admin company'
+            return JSONResponse({'detail': f'Hanya {who} yang dapat melakukan tindakan ini'}, status_code=403)
+        request.state.xm_user = user
         target_id = request.headers.get('X-XM-User-Id')
         owner = user
         if target_id:
@@ -80,6 +80,7 @@ async def require_login(request: Request, call_next):
             except ValueError:
                 return JSONResponse({'detail': 'Akun tujuan tidak valid'}, status_code=400)
             if str(target_id) != str(user['id']):
+                # Only the platform administrator may act inside another account's company.
                 if user['role'] != 'admin':
                     return JSONResponse({'detail': 'Anda hanya dapat mengakses workspace sendiri'}, status_code=403)
                 with connect() as conn:
@@ -111,21 +112,9 @@ def health():
     return {"ok": postgres_ok, "postgres": postgres_ok, "qdrant": qdrant_status(include_counts=False)}
 
 
-_stats_lock = Lock()
-_stats_cache = {}
-
-
 @app.get("/stats")
 def stats():
-    # Multiple open tabs poll this endpoint. Share one short-lived result so
-    # they do not run the same full-archive aggregates concurrently.
-    key = workspace_id()
-    with _stats_lock:
-        cached = _stats_cache.get(key)
-        if cached is None or time.monotonic() - cached[0] >= 15:
-            cached = (time.monotonic(), load_stats())
-            _stats_cache[key] = cached
-        return cached[1]
+    return cached_stats(workspace_id(), load_stats)
 
 
 def load_stats():
@@ -134,8 +123,10 @@ def load_stats():
         if workspace_cache.ready(conn):
             row = conn.execute("""SELECT
               (SELECT count(*) FROM xm.raw_messages WHERE company_id=current_setting('xm.workspace_id')) raw_messages,
-              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='buyer_request') buyer_requests,
-              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='property_listing') listings,
+              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='buyer_request' AND status<>'deleted') buyer_requests,
+              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='property_listing' AND status<>'deleted') listings,
+              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='buyer_request' AND status='ready') buyers_ready,
+              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='property_listing' AND status='ready') listings_ready,
               (SELECT count(*) FROM xm.matches WHERE company_id=current_setting('xm.workspace_id')) matches,
               (SELECT count(*) FROM xm.documents WHERE company_id=current_setting('xm.workspace_id') AND active AND review_status='review') needs_review""").fetchone()
         else:
@@ -152,7 +143,12 @@ def load_stats():
 def imports():
     with connect() as conn:
         return conn.execute(
-            "SELECT * FROM xm.imports WHERE company_id=current_setting('xm.workspace_id') ORDER BY created_at DESC LIMIT 30"
+            """SELECT i.*, coalesce(m.total,0) new_matches, coalesce(m.hot,0) new_hot, coalesce(m.warm,0) new_warm
+               FROM xm.imports i LEFT JOIN (
+                 SELECT import_id, count(*) total, count(*) FILTER (WHERE last_score>=80) hot, count(*) FILTER (WHERE last_score<80) warm
+                 FROM xm.match_events WHERE company_id=current_setting('xm.workspace_id') AND source='import' AND active GROUP BY import_id) m
+                 ON m.import_id=i.id
+               WHERE i.company_id=current_setting('xm.workspace_id') ORDER BY i.created_at DESC LIMIT 30"""
         ).fetchall()
 
 
@@ -392,15 +388,18 @@ def agent_search(q: str, document_type: str | None = None, limit: int = 10):
     with connect() as conn:
         if ids:
             rows = conn.execute(
-                """SELECT d.*, r.chat_name, r.sent_at, r.raw_text, r.author FROM xm.documents d
-                   JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id = ANY(%s::uuid[])""", (ids,)
+                """SELECT d.*, r.chat_name, r.sent_at, r.raw_text, r.author, e.public_id, e.status AS entity_status FROM xm.documents d
+                   JOIN xm.raw_messages r ON r.id=d.raw_message_id LEFT JOIN xm.entities e ON e.entity_id=d.entity_id
+                   WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id = ANY(%s::uuid[])
+                     AND coalesce(e.status,'ready')='ready'""", (ids,)
             ).fetchall()
         else:
             term = f"%{q.strip()}%"
             rows = conn.execute(
-                """SELECT d.*, r.chat_name, r.sent_at, r.raw_text, r.author FROM xm.documents d
-                   JOIN xm.raw_messages r ON r.id=d.raw_message_id
+                """SELECT d.*, r.chat_name, r.sent_at, r.raw_text, r.author, e.public_id, e.status AS entity_status FROM xm.documents d
+                   JOIN xm.raw_messages r ON r.id=d.raw_message_id LEFT JOIN xm.entities e ON e.entity_id=d.entity_id
                    WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND (%s::text IS NULL OR d.document_type=%s)
+                     AND coalesce(e.status,'ready')='ready'
                      AND (d.normalized_text ILIKE %s OR %s = ANY(d.categories))
                    ORDER BY d.created_at DESC LIMIT %s""",
                 (document_type, document_type, term, category or "", min(limit, 50)),
@@ -415,10 +414,13 @@ def agent_search(q: str, document_type: str | None = None, limit: int = 10):
 def agent_matches(contact: str | None = None, min_score: float = 60, limit: int = 20):
     with connect() as conn:
         base = """SELECT m.score, m.explanation, br.contact_name buyer_contact, br.normalized_text buyer_request,
-                         pl.contact_name listing_contact, pl.normalized_text property_listing
+                         pl.contact_name listing_contact, pl.normalized_text property_listing,
+                         be.public_id buyer_id, le.public_id listing_id
                   FROM xm.matches m JOIN xm.documents br ON br.id=m.buyer_request_id
                   JOIN xm.documents pl ON pl.id=m.property_listing_id
-                  WHERE m.company_id=current_setting('xm.workspace_id') AND m.score >= %s"""
+                  LEFT JOIN xm.entities be ON be.entity_id=br.entity_id LEFT JOIN xm.entities le ON le.entity_id=pl.entity_id
+                  WHERE m.company_id=current_setting('xm.workspace_id') AND m.score >= %s
+                    AND coalesce(be.status,'ready')='ready' AND coalesce(le.status,'ready')='ready'"""
         if contact:
             term = f"%{contact}%"
             rows = conn.execute(
@@ -436,3 +438,15 @@ from workspace import router as workspace_router
 app.include_router(workspace_router)
 from location_routes import router as location_router
 app.include_router(location_router)
+from entity_routes import router as entity_router
+app.include_router(entity_router)
+from matchlog import router as matchlog_router
+app.include_router(matchlog_router)
+from stock import router as stock_router
+app.include_router(stock_router)
+from dashboard import router as dashboard_router
+app.include_router(dashboard_router)
+from team import router as team_router
+app.include_router(team_router)
+from company import router as company_router
+app.include_router(company_router)

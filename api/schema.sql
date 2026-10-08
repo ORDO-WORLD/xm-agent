@@ -245,3 +245,158 @@ ALTER TABLE xm.audit_events ALTER COLUMN company_id SET DEFAULT current_setting(
 ALTER TABLE xm.glossary ALTER COLUMN company_id SET DEFAULT current_setting('xm.workspace_id');
 ALTER TABLE xm.maintenance_jobs ALTER COLUMN company_id SET DEFAULT current_setting('xm.workspace_id');
 CREATE INDEX IF NOT EXISTS maintenance_workspace_recent_idx ON xm.maintenance_jobs(company_id,created_at DESC);
+
+
+-- ============================================================================
+-- v4.0: companies with several accounts, public IDs, listing/buyer status,
+-- recent-match history, tracked-sales stock log and company settings.
+-- Everything below is idempotent and DDL-only (data backfill lives in
+-- entities.migrate_v4 so that startup stays fast and restartable).
+-- ============================================================================
+
+-- Several accounts may share one company workspace. Roles: 'admin' (platform
+-- administrator), 'company_admin' (super admin of one company), 'user' (member).
+ALTER TABLE xm.users DROP CONSTRAINT IF EXISTS users_workspace_id_key;
+CREATE INDEX IF NOT EXISTS users_workspace_idx ON xm.users(workspace_id);
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='xm.users'::regclass AND conname='users_role_check'
+            AND pg_get_constraintdef(oid) NOT LIKE '%company_admin%') THEN
+  ALTER TABLE xm.users DROP CONSTRAINT users_role_check;
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='xm.users'::regclass AND conname='users_role_check') THEN
+  ALTER TABLE xm.users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','company_admin','user'));
+ END IF;
+END $$;
+
+-- Company-level settings live in the existing per-workspace preferences row.
+ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS company_name text;
+ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS search_locked boolean NOT NULL DEFAULT false;
+ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS listing_group_by text NOT NULL DEFAULT 'sender';
+DO $$ BEGIN
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='xm.app_preferences'::regclass AND conname='app_preferences_group_by_check') THEN
+  ALTER TABLE xm.app_preferences ADD CONSTRAINT app_preferences_group_by_check CHECK (listing_group_by IN ('sender','phone'));
+ END IF;
+END $$;
+
+-- Human-friendly public IDs: L-AB908 / B-AB908. Letters skip I and O so they
+-- cannot be confused with 1 and 0; the letter block grows (AA..ZZ, AAA..ZZZ,
+-- ...) while the three digits roll over, so the sequence never runs out.
+CREATE OR REPLACE FUNCTION xm.public_id(prefix text, seq bigint) RETURNS text
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  base constant bigint := 24;
+  blk bigint := seq / 1000;
+  digits int := (seq % 1000)::int;
+  width int := 2;
+  span bigint := 576;
+  letters text := '';
+BEGIN
+  WHILE blk >= span LOOP
+    blk := blk - span;
+    width := width + 1;
+    span := span * base;
+  END LOOP;
+  FOR i IN 1..width LOOP
+    letters := substr(alphabet, (blk % base)::int + 1, 1) || letters;
+    blk := blk / base;
+  END LOOP;
+  RETURN prefix || '-' || letters || lpad(digits::text, 3, '0');
+END $$;
+
+CREATE TABLE IF NOT EXISTS xm.entity_counters (
+ company_id text NOT NULL,
+ document_type text NOT NULL,
+ next_seq bigint NOT NULL DEFAULT 0,
+ PRIMARY KEY (company_id, document_type)
+);
+
+-- One entity = one unique complete message text per company and kind. It is
+-- what a card represents in the UI and what keeps its ID and status when the
+-- matching tables are rebuilt.
+CREATE TABLE IF NOT EXISTS xm.entities (
+ entity_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ company_id text NOT NULL DEFAULT current_setting('xm.workspace_id'),
+ document_type text NOT NULL CHECK (document_type IN ('buyer_request','property_listing')),
+ text_hash text NOT NULL,
+ seq bigint NOT NULL,
+ public_id text NOT NULL,
+ status text NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','on_hold','sold','deleted')),
+ status_note text,
+ status_changed_at timestamptz,
+ status_changed_by uuid,
+ first_seen_at timestamp,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ UNIQUE (company_id, document_type, text_hash),
+ UNIQUE (company_id, document_type, seq),
+ UNIQUE (company_id, public_id)
+);
+CREATE INDEX IF NOT EXISTS entities_status_idx ON xm.entities(company_id, document_type, status);
+
+ALTER TABLE xm.documents ADD COLUMN IF NOT EXISTS entity_id uuid;
+CREATE INDEX IF NOT EXISTS documents_entity_idx ON xm.documents(entity_id);
+CREATE INDEX IF NOT EXISTS documents_unassigned_idx ON xm.documents(company_id) WHERE entity_id IS NULL AND active;
+CREATE INDEX IF NOT EXISTS documents_contact_phones_idx ON xm.documents USING gin(contact_phones);
+CREATE INDEX IF NOT EXISTS documents_contact_phone_idx ON xm.documents(company_id, contact_phone) WHERE contact_phone IS NOT NULL;
+
+ALTER TABLE xm.document_groups ADD COLUMN IF NOT EXISTS entity_id uuid;
+ALTER TABLE xm.document_groups ADD COLUMN IF NOT EXISTS public_id text;
+ALTER TABLE xm.document_groups ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'ready';
+CREATE INDEX IF NOT EXISTS document_groups_status_idx ON xm.document_groups(company_id, document_type, status, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS document_groups_entity_idx ON xm.document_groups(entity_id);
+CREATE INDEX IF NOT EXISTS document_groups_public_idx ON xm.document_groups(company_id, public_id);
+
+-- History of buyer/listing pairs. 'import' rows are what "Match terbaru" shows;
+-- 'baseline' marks pairs that already existed before this feature or before a
+-- settings-driven recompute, so they are never announced as new.
+CREATE TABLE IF NOT EXISTS xm.match_events (
+ id bigserial PRIMARY KEY,
+ company_id text NOT NULL DEFAULT current_setting('xm.workspace_id'),
+ buyer_entity uuid NOT NULL,
+ listing_entity uuid NOT NULL,
+ first_score numeric(6,2) NOT NULL,
+ last_score numeric(6,2) NOT NULL,
+ temperature text NOT NULL CHECK (temperature IN ('hot','warm')),
+ source text NOT NULL CHECK (source IN ('import','recompute','baseline')),
+ import_id uuid,
+ agent_name text,
+ active boolean NOT NULL DEFAULT true,
+ found_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ hot_at timestamptz,
+ last_seen_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ UNIQUE (company_id, buyer_entity, listing_entity)
+);
+CREATE INDEX IF NOT EXISTS match_events_found_idx ON xm.match_events(company_id, found_at DESC) WHERE source='import';
+CREATE INDEX IF NOT EXISTS match_events_buyer_idx ON xm.match_events(company_id, buyer_entity);
+CREATE INDEX IF NOT EXISTS match_events_listing_idx ON xm.match_events(company_id, listing_entity);
+CREATE INDEX IF NOT EXISTS match_events_import_idx ON xm.match_events(import_id) WHERE import_id IS NOT NULL;
+
+-- Sales phone numbers a company wants to monitor, and the automatic stock log.
+CREATE TABLE IF NOT EXISTS xm.tracked_sales (
+ company_id text NOT NULL DEFAULT current_setting('xm.workspace_id'),
+ phone text NOT NULL,
+ label text,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ created_by uuid,
+ PRIMARY KEY (company_id, phone)
+);
+CREATE TABLE IF NOT EXISTS xm.stock_log (
+ id bigserial PRIMARY KEY,
+ company_id text NOT NULL DEFAULT current_setting('xm.workspace_id'),
+ phone text NOT NULL,
+ logged_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ event_type text NOT NULL CHECK (event_type IN ('import','status','manual','tracking')),
+ import_id uuid,
+ agent_name text,
+ total integer NOT NULL,
+ ready integer NOT NULL,
+ on_hold integer NOT NULL,
+ sold integer NOT NULL,
+ deleted integer NOT NULL,
+ delta_total integer NOT NULL DEFAULT 0,
+ delta_ready integer NOT NULL DEFAULT 0,
+ note text
+);
+CREATE INDEX IF NOT EXISTS stock_log_phone_idx ON xm.stock_log(company_id, phone, logged_at DESC);
+CREATE INDEX IF NOT EXISTS stock_log_time_idx ON xm.stock_log(company_id, logged_at DESC);
+
