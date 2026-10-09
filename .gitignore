@@ -43,3 +43,5 @@ next-env.d.ts
 /work/
 /data/
 /release-data/
+
+.venv/
