@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-WORKSPACE_TABLES = ('export_jobs', 'integration_keys', 'match_events', 'stock_log', 'tracked_sales', 'group_matches', 'document_group_members', 'document_groups',
+WORKSPACE_TABLES = ('match_deliveries', 'export_jobs', 'integration_keys', 'match_events', 'stock_log', 'tracked_sales', 'group_matches', 'document_group_members', 'document_groups',
                     'workspace_cache_state', 'matches', 'documents', 'entities', 'entity_counters', 'raw_messages', 'imports',
                     'maintenance_jobs', 'glossary', 'location_indexes', 'match_settings', 'app_preferences', 'audit_events')
 

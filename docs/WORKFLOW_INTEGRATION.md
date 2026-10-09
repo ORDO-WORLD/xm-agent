@@ -104,14 +104,62 @@ Pilihan:
 | `statuses` | `hot`, `warm`, `unmatched`, atau gabungan dipisahkan koma; default `hot,warm` |
 | `stock_status` | Filter status sumber: `ready`, `on_hold`, `sold`, `deleted`, atau gabungan; default `ready` |
 | `date_from`, `date_to` | Tanggal posting sumber; kosong berarti tidak dibatasi tanggal |
+| `buyer_date_from`, `buyer_date_to` | Rentang tanggal posting buyer, pada kedua arah pencocokan |
+| `listing_date_from`, `listing_date_to` | Rentang tanggal posting listing, pada kedua arah pencocokan |
+| `buyer_period`, `listing_period` | Periode relatif untuk jadwal; diubah menjadi tanggal WIB saat job dibuat |
+| `delivery_scope` | Identitas aliran report/audiens yang stabil; jika diisi, hanya pasangan yang belum dikonfirmasi terkirim masuk report |
 | `time_from`, `time_to` | Jam batas pada tanggal tersebut, mengikuti perilaku filter Cocokkan |
 | `phones` | Filter nomor listing, dipisahkan koma; dipakai pada arah `property` |
 | `search`, `public_id` | Filter teks/ID seperti Cocokkan; `search` kosong berarti tanpa filter keyword |
 | `recipients` | Mapping kunci kelompok yang persis sama → nomor WhatsApp tujuan |
+| `recipient_names` | Mapping kunci kelompok → nama penerima GOWA, misalnya `Ivan P - Konig` |
 
 Rekomendasi target mengikuti perilaku export Cocokkan: target yang masih Ready.
 Batas 15.000 halaman berlaku per PDF kelompok. Job kosong selesai dengan
 `files: []`; workflow dapat mencatat “tidak ada hasil” tanpa mengirim pesan.
+
+### Periode buyer dan listing yang terpisah
+
+Pada Cocokkan, pilih **Tanggal posting buyer** dan **Tanggal posting listing**
+secara independen. Nilainya tetap mengikuti jenis data ketika arah dibalik.
+Jumlah Hot/Warm, kelompok sales, rekomendasi, PDF pilihan, dan export semua
+memakai kedua rentang yang sama. Target yang tidak mempunyai posting dalam
+rentang terpilih tidak ditampilkan. Repost dalam rentang tetap ditemukan
+meskipun ada salinan yang lebih baru di luar rentang.
+
+Untuk jadwal 09.37 WIB, buyer hari ini dibandingkan stok tiga bulan terakhir:
+
+```json
+{
+  "request_id": "konig:2026-10-09:09:37",
+  "direction": "property",
+  "group_by": "phone",
+  "buyer_period": {"mode": "today"},
+  "listing_period": {"mode": "last_months", "amount": 3},
+  "delivery_scope": "konig-daily",
+  "statuses": "hot,warm",
+  "stock_status": "ready",
+  "recipient_names": {"6282226811158": "Ivan P - Konig"}
+}
+```
+
+Kebalikannya: gunakan `listing_period: {"mode":"today"}` dan
+`buyer_period: {"mode":"last_months","amount":1}`. Pilih `direction` sesuai
+kelompok penerima yang ingin dibuat. Semua tanggal dihitung pada kalender WIB.
+Pada 9 Oktober 2026, `last_months` dengan `amount: 1` berarti 9 September–9
+Oktober; `previous_month` berarti 1–30 September. `amount: 3` berarti 9 Juli–9
+Oktober. Batas hari awal dan akhir ikut dihitung. Pilihan lain: `all`,
+`last_days` (termasuk hari ini), dan `custom` dengan `date_from`/`date_to`.
+
+Jangan campur periode relatif dengan tanggal absolut untuk jenis data yang
+sama, atau dengan `date_from`/`date_to` lama. Job membekukan periode saat
+dibuat; retry dengan `request_id` yang sama tetap memakai periode pertama,
+meskipun melewati tengah malam. Respons job memuat tanggal hasil di `periods`.
+
+Filter tanggal posting bukan tanggal pertama kali buyer diimpor. Jika hanya
+memilih `today` pada 09.37, buyer yang masuk setelah jam itu belum tercakup;
+gunakan rentang yang mencakup sejak run terakhir atau jadwal tambahan agar
+data tersebut tidak terlewat.
 
 ## 2. Tunggu status dan baca manifest
 
@@ -136,6 +184,7 @@ Saat selesai, tiap item `files` berbentuk:
   "contact_name": "Ivan Prayogo",
   "contact_phone": "6282226811158",
   "recipient_phone": "6282226811158",
+  "recipient_name": "Ivan P - Konig",
   "recipient_status": "ready",
   "recipient_reason": "group_phone",
   "filename": "01_Ivan-Prayogo_6282226811158_60listing_hal1-574.pdf",
@@ -195,6 +244,36 @@ Catat hasil pengiriman berdasarkan `(job_id, file_id, recipient_phone)` di
 workflow. Idempotency export mencegah job duplikat, tetapi tidak menggantikan
 pencatatan pengiriman WhatsApp. Jika respons GOWA timeout setelah request
 terkirim, hasilnya belum pasti; jangan langsung menganggap pesan tidak terkirim.
+
+### Konfirmasi pengiriman dan hindari pasangan berulang
+
+Setelah GOWA mengonfirmasi pengiriman berhasil, catat receipt untuk file itu:
+
+```http
+POST /api/integration/exports/<uuid-job>/files/<uuid-file>/delivered
+Authorization: Bearer <token-integrasi>
+Content-Type: application/json
+
+{"delivery_id":"<id-pengiriman-GOWA>"}
+```
+
+Endpoint ini memerlukan `delivery_scope`, file completed yang belum expired,
+dan penerima `ready`. Retry receipt idempotent. Manifest kemudian menyertakan
+`delivered_at` dan `delivery_id`; consumer melewati file yang sudah terkirim.
+Download atau pembuatan PDF tidak menandai pasangan sebagai terkirim.
+
+Job baru dengan scope yang sama mengecualikan pasangan buyer–listing yang
+telah dikonfirmasi. ID pasangan memakai entitas yang stabil, sehingga repost,
+perhitungan ulang, perubahan arah, dan kedaluwarsa PDF tidak mengulang pasangan
+tersebut. Stok yang sama dengan buyer berbeda tetap masuk sebagai pasangan
+baru. Scope terpisah digunakan untuk audiens/aliran report yang berbeda.
+Report dengan scope hanya mendukung Hot/Warm, bukan sumber tanpa pasangan.
+
+Jalankan satu aliran pengiriman secara berurutan. Receipt tidak membatalkan PDF
+yang sudah terlanjur disiapkan job lain sebelum receipt dicatat. Consumer tetap
+harus menyimpan status GOWA per file dan menangani timeout dengan rekonsiliasi,
+agar retry setelah pengiriman berhasil tetapi sebelum receipt tidak mengirim
+ulang. Backend Property tidak memanggil GOWA atau menjamin exactly-once delivery.
 
 ## Pembatalan, worker, dan deployment
 

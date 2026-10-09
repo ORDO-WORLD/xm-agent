@@ -12,6 +12,7 @@ from company import company_row, effective_terms, personal_terms
 from entities import STATUSES
 from tenant import owner_id
 from search_terms import normalize_terms, search_filter
+from periods import MatchingPeriods, date_filter, matching_windows
 
 router = APIRouter()
 
@@ -205,28 +206,6 @@ def index_status():
     with connect() as conn:
         return conn.execute("SELECT * FROM xm.maintenance_jobs WHERE company_id=current_setting('xm.workspace_id') ORDER BY created_at DESC LIMIT 1").fetchone()
 
-def date_filter(date_from, date_to, time_from='00:00', time_to='23:59'):
-    from datetime import date, time, datetime, timedelta
-    import re
-    if any(not re.fullmatch(r'\d{2}:\d{2}', v) for v in (time_from,time_to)):
-        raise HTTPException(400,'Jam tidak valid; gunakan HH:MM.')
-    try:
-        lower = datetime.combine(date.fromisoformat(date_from),time.fromisoformat(time_from)) if date_from else None
-        upper = datetime.combine(date.fromisoformat(date_to),time.fromisoformat(time_to)) if date_to else None
-    except ValueError:
-        raise HTTPException(400,'Tanggal atau jam tidak valid.')
-    if lower and upper and lower > upper:
-        raise HTTPException(400,'Awal rentang tidak boleh melewati akhir rentang.')
-    clause, params = '', []
-    if lower:
-        clause += ' AND r.sent_at >= %s'
-        params.append(lower)
-    if upper:
-        clause += ' AND r.sent_at < %s'
-        params.append(upper + timedelta(minutes=1))
-    return clause, params
-
-
 @router.get('/workspace/dates')
 def workspace_dates(direction: Literal['buyer','property']='buyer', date_from: str='', date_to: str=''):
     from datetime import date
@@ -280,16 +259,19 @@ def attach_entities(conn, rows):
 
 
 @router.get('/workspace')
-def workspace(direction: Literal['buyer','property']='buyer', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', offset: int=0, time_from: str='00:00', time_to: str='23:59', stock_status: str='ready', public_id: str='', group_by: str='', group_key: str | None=None, request: Request = None):
+def workspace(direction: Literal['buyer','property']='buyer', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', offset: int=0, time_from: str='00:00', time_to: str='23:59', stock_status: str='ready', public_id: str='', group_by: str='', group_key: str | None=None, request: Request = None,
+              buyer_date_from: str='', buyer_date_to: str='', listing_date_from: str='', listing_date_to: str=''):
     import workspace_cache
-    clause, date_params = date_filter(date_from,date_to,time_from,time_to)
+    (clause, date_params), (target_clause, target_params) = matching_windows(direction, date_from, date_to, time_from, time_to,
+        buyer_date_from, buyer_date_to, listing_date_from, listing_date_to)
     chosen = stock_statuses(stock_status)
     if group_by and (direction != 'property' or group_by not in ('sender','phone')):
         raise HTTPException(400, 'Pengelompokan hanya untuk listing property: sender atau phone.')
     with connect() as conn:
         search = resolve_search(conn, request, search)
         if workspace_cache.ready(conn):
-            return workspace_cache.sources(conn,direction,search,phones,statuses,clause,date_params,offset,chosen,public_id,group_by or None,group_key)
+            return workspace_cache.sources(conn,direction,search,phones,statuses,clause,date_params,offset,chosen,public_id,group_by or None,group_key,
+                                           target_clause, target_params)
     kind, relation = ('buyer_request','buyer_request_id') if direction=='buyer' else ('property_listing','property_listing_id')
     other = 'property_listing_id' if direction == 'buyer' else 'buyer_request_id'
     selected=set(statuses.split(','))
@@ -317,7 +299,6 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
         # Read all contact numbers in a signature, including second/alternate numbers.
         query += " AND (d.contact_phones && %s::text[] OR d.contact_phone = ANY(%s))"
         params.extend([numbers,numbers])
-    clause, date_params = date_filter(date_from,date_to,time_from,time_to)
     query += clause
     params.extend(date_params)
     query += f"""), ranked AS (
@@ -332,9 +313,13 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
        JOIN xm.documents source ON source.raw_message_id=sr.id AND source.company_id=current_setting('xm.workspace_id') AND source.active
            AND source.document_type='{kind}'
        JOIN xm.matches m ON m.{relation}=source.id AND m.company_id=current_setting('xm.workspace_id')
-       JOIN xm.documents t ON t.id=m.{other} AND t.active AND t.company_id=current_setting('xm.workspace_id')
-       JOIN xm.raw_messages tr ON tr.id=t.raw_message_id
-       WHERE m.score>=60 GROUP BY e.raw_text,tr.raw_text
+       JOIN xm.documents mt ON mt.id=m.{other} AND mt.active AND mt.company_id=current_setting('xm.workspace_id')
+       JOIN xm.raw_messages mtr ON mtr.id=mt.raw_message_id
+       JOIN xm.raw_messages tr ON tr.company_id=mt.company_id AND md5(tr.raw_text)=md5(mtr.raw_text) AND tr.raw_text=mtr.raw_text
+       JOIN xm.documents t ON t.raw_message_id=tr.id AND t.company_id=mt.company_id AND t.active AND t.document_type=mt.document_type
+       LEFT JOIN xm.entities te ON te.entity_id=t.entity_id
+       WHERE m.score>=60 AND coalesce(te.status,'ready')='ready'
+       {target_clause.replace('r.sent_at', 'tr.sent_at')} GROUP BY e.raw_text,tr.raw_text
     ), counts AS (
        SELECT raw_text,count(*) match_count,count(*) FILTER(WHERE score>=80) hot_count,
               count(*) FILTER(WHERE score<80) warm_count FROM pairs GROUP BY raw_text
@@ -348,17 +333,25 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
     query+=' OR '.join(filters or ['false'])+') ORDER BY d.sent_at DESC NULLS LAST,d.id'
     if not all_statuses:
         query+=' LIMIT 201 OFFSET %s'
-    params.append(max(0,offset))
+    # The page CTE precedes pair aggregation, so its offset parameter comes first.
+    if all_statuses:
+        params.append(max(0, offset))
+        params.extend(target_params)
+    else:
+        params.extend(target_params)
+        params.append(max(0, offset))
     with connect() as conn:
         rows=attach_entities(conn,conn.execute(query,params).fetchall())
     return {'rows':rows[:200],'has_more':len(rows)>200}
 
 
 @router.get('/workspace/groups')
-def workspace_groups(group_by: str='', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', time_from: str='00:00', time_to: str='23:59', stock_status: str='ready', public_id: str='', group_search: str='', offset: int=0, request: Request = None):
+def workspace_groups(group_by: str='', search: str='', phones: str='', statuses: str='hot,warm,unmatched', date_from: str='', date_to: str='', time_from: str='00:00', time_to: str='23:59', stock_status: str='ready', public_id: str='', group_search: str='', offset: int=0, request: Request = None,
+                     buyer_date_from: str='', buyer_date_to: str='', listing_date_from: str='', listing_date_to: str=''):
     """Listings grouped by message sender or by the phone number written in the bubble."""
     import workspace_cache
-    clause, date_params = date_filter(date_from,date_to,time_from,time_to)
+    (clause, date_params), (target_clause, target_params) = matching_windows('property', date_from, date_to, time_from, time_to,
+        buyer_date_from, buyer_date_to, listing_date_from, listing_date_to)
     chosen = stock_statuses(stock_status)
     with connect() as conn:
         mode = group_by or company_row(conn)['listing_group_by']
@@ -367,9 +360,10 @@ def workspace_groups(group_by: str='', search: str='', phones: str='', statuses:
         search = resolve_search(conn, request, search)
         if not workspace_cache.ready(conn):
             return {'group_by': mode, 'groups': [], 'has_more': False}
-        return workspace_cache.group_summary(conn,'property',search,phones,statuses,clause,date_params,chosen,public_id,mode,group_search,offset=offset)
+        return workspace_cache.group_summary(conn,'property',search,phones,statuses,clause,date_params,chosen,public_id,mode,group_search,offset=offset,
+                                             target_clause=target_clause, target_params=target_params)
 
-class Batch(BaseModel):
+class Batch(MatchingPeriods):
     direction: Literal['buyer','property']='buyer'
     ids: list[uuid.UUID] = Field(max_length=50)
     target_status: list[Literal['ready','on_hold','sold']] = ['ready']
@@ -378,11 +372,15 @@ class Batch(BaseModel):
 def recommendations(payload: Batch):
     relation, other, kind = ('buyer_request_id','property_listing_id','buyer_request') if payload.direction=='buyer' else ('property_listing_id','buyer_request_id','property_listing')
     ids=list(dict.fromkeys(payload.ids))
+    (source_clause, source_params), (target_clause, target_params) = payload.windows(payload.direction)
     with connect() as conn:
         import workspace_cache
         if workspace_cache.ready(conn):
-            return workspace_cache.recommendations(conn,payload.direction,ids,tuple(payload.target_status) or ('ready',))
-        sources=conn.execute('''SELECT d.*,r.raw_text,r.chat_name,r.sent_at FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''',(ids,kind)).fetchall()
+            return workspace_cache.recommendations(conn,payload.direction,ids,tuple(payload.target_status) or ('ready',), target_clause, target_params,
+                                                   source_clause=source_clause, source_params=source_params)
+        sources=conn.execute('''SELECT d.*,r.raw_text,r.chat_name,r.sent_at FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''' + source_clause,
+                             [ids,kind,*source_params]).fetchall()
+        ids = [source['id'] for source in sources]
         # Resolve all copies of a selected source; aggregate before rendering so
         # copies with different historic candidate edges do not lose matches.
         rows=conn.execute(f'''WITH source_copies AS (
@@ -394,9 +392,14 @@ def recommendations(payload: Batch):
           WHERE chosen.company_id=current_setting('xm.workspace_id') AND chosen.active AND chosen.id=ANY(%s) AND chosen.document_type=%s
         ) SELECT m.id match_id,s.source_id,m.score,m.explanation,d.*,r.raw_text,r.chat_name,r.sent_at
           FROM source_copies s JOIN xm.matches m ON m.{relation}=s.copy_id
-          JOIN xm.documents d ON d.id=m.{other} JOIN xm.raw_messages r ON r.id=d.raw_message_id
+          JOIN xm.documents matched ON matched.id=m.{other} AND matched.active AND matched.company_id=current_setting('xm.workspace_id')
+          JOIN xm.raw_messages mr ON mr.id=matched.raw_message_id
+          JOIN xm.raw_messages r ON r.company_id=matched.company_id AND md5(r.raw_text)=md5(mr.raw_text) AND r.raw_text=mr.raw_text
+          JOIN xm.documents d ON d.raw_message_id=r.id AND d.company_id=matched.company_id AND d.document_type=matched.document_type
+          LEFT JOIN xm.entities e ON e.entity_id=d.entity_id
           WHERE m.company_id=current_setting('xm.workspace_id') AND d.company_id=current_setting('xm.workspace_id') AND d.active AND m.score>=60
-          ORDER BY m.score DESC,r.sent_at DESC NULLS LAST,d.id''',(ids,kind)).fetchall()
+            AND coalesce(e.status,'ready')=ANY(%s){target_clause}
+          ORDER BY m.score DESC,r.sent_at DESC NULLS LAST,d.id''',[ids,kind,list(payload.target_status) or ['ready'],*target_params]).fetchall()
         attach_entities(conn,sources); attach_entities(conn,rows)
     return {'groups':[{'source':s,'recommendations':group_identical([r for r in rows if r['source_id']==s['id']])} for s in sources]}
 
@@ -420,14 +423,15 @@ class ExportPair(BaseModel):
     source_id: uuid.UUID
     target_id: uuid.UUID | None=None
 
-class Export(BaseModel):
+class Export(MatchingPeriods):
     direction: Literal['buyer','property']='buyer'
     pairs: list[ExportPair] = Field(min_length=1,max_length=200)
+    target_status: list[Literal['ready','on_hold','sold']] = ['ready']
 
 @router.post('/export/pdf')
 def export_pdf(payload: Export):
     from report import build_report
-    groups=recommendations(Batch(direction=payload.direction,ids=list(dict.fromkeys(p.source_id for p in payload.pairs))))['groups']
+    groups=recommendations(Batch(**payload.model_dump(exclude={'pairs'}),ids=list(dict.fromkeys(p.source_id for p in payload.pairs))))['groups']
     selected=[]
     for p in payload.pairs:
         group=next((g for g in groups if g['source']['id']==p.source_id),None)

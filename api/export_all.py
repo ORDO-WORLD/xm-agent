@@ -26,7 +26,8 @@ from company import company_row
 from db import connect
 from stock import clean_contact_name, display_phone
 from tenant import workspace_id
-from workspace import date_filter, resolve_search, stock_statuses
+from workspace import resolve_search, stock_statuses
+from periods import MatchingPeriods
 
 router = APIRouter(prefix='/export/all')
 EXPORT_DIR = Path(os.getenv('XM_EXPORT_DIR') or Path(tempfile.gettempdir()) / 'xm-exports')
@@ -36,7 +37,7 @@ TEMPERATURES = ('hot', 'warm', 'unmatched')
 MAX_PAGES = 15000  # beyond this the file is too heavy to merge and to open on a phone
 
 
-class Filters(BaseModel):
+class Filters(MatchingPeriods):
     """The same filters as the Cocokkan list."""
     direction: Literal['buyer', 'property'] = 'buyer'
     search: str = Field(default='', max_length=4020)
@@ -44,11 +45,9 @@ class Filters(BaseModel):
     statuses: str = 'hot,warm'
     stock_status: str = 'ready'
     public_id: str = ''
-    date_from: str = ''
-    date_to: str = ''
-    time_from: str = '00:00'
-    time_to: str = '23:59'
     group_by: Literal['sender', 'phone'] | None = None
+    # Empty for manual export; an integration stream opts in to delivery deduplication.
+    delivery_scope: str = Field(default='', max_length=200)
 
 
 class Part(Filters):
@@ -71,17 +70,18 @@ def scope(conn, request, filters, group_key=None):
     if not workspace_cache.ready(conn):
         raise HTTPException(409, 'Hasil pencocokan sedang disiapkan. Coba lagi sebentar.')
     group_by = filters.group_by or company_row(conn)['listing_group_by'] or 'sender'
-    clause, date_params = date_filter(filters.date_from, filters.date_to, filters.time_from, filters.time_to)
+    (clause, date_params), (target_clause, target_params) = filters.windows(filters.direction)
     eligible, params = workspace_cache._eligible(
         filters.direction, resolve_search(conn, request, filters.search), filters.phones, filters.statuses, clause, date_params,
-        stock_statuses(filters.stock_status), filters.public_id, group_by, group_key, per_key=True)
+        stock_statuses(filters.stock_status), filters.public_id, group_by, group_key, per_key=True,
+        target_clause=target_clause, target_params=target_params, delivery_scope=filters.delivery_scope)
     return group_by, eligible, params
 
 
 def group_stats(conn, eligible, params, group_by, chosen):
     rows = conn.execute('WITH ' + eligible + '''
-      SELECT e.group_key AS key, count(*) AS sources, coalesce(sum(g.hot_count),0) AS hot, coalesce(sum(g.warm_count),0) AS warm,
-             count(*) FILTER (WHERE g.hot_count+g.warm_count=0) AS unmatched,
+      SELECT e.group_key AS key, count(*) AS sources, coalesce(sum(e.hot_count),0) AS hot, coalesce(sum(e.warm_count),0) AS warm,
+             count(*) FILTER (WHERE e.hot_count+e.warm_count=0) AS unmatched,
              mode() WITHIN GROUP (ORDER BY e.contact_name) AS contact_name,
              mode() WITHIN GROUP (ORDER BY e.contact_phone) AS contact_phone
       FROM eligible e JOIN xm.document_groups g ON g.group_id=e.group_id
@@ -135,7 +135,10 @@ def part(payload: Part, request: Request):
         rows = conn.execute('WITH ' + eligible + ' SELECT id FROM eligible ORDER BY sent_at DESC NULLS LAST,id LIMIT %s OFFSET %s',
                             params + [SLICE + 1, payload.offset]).fetchall()
         ids = [row['id'] for row in rows[:SLICE]]
-        found = {group['source']['id']: group for group in workspace_cache.recommendations(conn, payload.direction, ids)['groups']} if ids else {}
+        _, (target_clause, target_params) = payload.windows(payload.direction)
+        found = {group['source']['id']: group for group in workspace_cache.recommendations(
+            conn, payload.direction, ids, target_clause=target_clause, target_params=target_params,
+            delivery_scope=payload.delivery_scope)['groups']} if ids else {}
     pairs = []
     for source_id in ids:
         group = found.get(source_id)
@@ -156,7 +159,13 @@ def part(payload: Part, request: Request):
         (target / f'{payload.index:05d}-{payload.offset:08d}.pdf').write_bytes(pdf)
         if payload.offset == 0 and stats:
             (target / f'{payload.index:05d}.json').write_text(json.dumps({**stats[0], 'group_by': group_by, 'direction': payload.direction, 'first_page': payload.first_page}))
-    return {'pages': pages, 'next_offset': payload.offset + SLICE if len(rows) > SLICE else None}
+    entity_pairs = []
+    for source, target in pairs:
+        if target and source.get('entity_id') and target.get('entity_id'):
+            buyer, listing = (source, target) if payload.direction == 'buyer' else (target, source)
+            entity_pairs.append([str(buyer['entity_id']), str(listing['entity_id'])])
+    return {'pages': pages, 'next_offset': payload.offset + SLICE if len(rows) > SLICE else None,
+            'entity_pairs': entity_pairs}
 
 
 def merge_pdf_parts(items):

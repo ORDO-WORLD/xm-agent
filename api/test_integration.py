@@ -14,7 +14,7 @@ from integration import cleanup_expired, process_next_export
 from test_v4_features import V4Case, BUYER_HOUSE, BUYER_RUKO, LISTING_HOUSE_A, LISTING_HOUSE_B, LISTING_RUKO
 
 
-class WorkflowIntegrationTests(V4Case):
+class WorkflowIntegrationCase(V4Case):
     def setUp(self):
         super().setUp()
         self.disk = tempfile.TemporaryDirectory()
@@ -42,6 +42,8 @@ class WorkflowIntegrationTests(V4Case):
     def status(self, job):
         return self.call(self.workflow, f"/integration/exports/{job['job_id']}")
 
+
+class WorkflowIntegrationTests(WorkflowIntegrationCase):
     def test_admin_generates_scoped_key_raw_secret_not_stored_and_revocation(self):
         self.assertEqual(self.key['scope'], 'property:export')
         self.call(self.staff, '/integration/keys', 'POST', {'name': 'no'}, status=403)

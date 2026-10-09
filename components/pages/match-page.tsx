@@ -9,7 +9,7 @@ import { useStatusActions } from '@/components/app/status-menu';
 import { RecommendationCard, SourceCard } from '@/components/match/cards';
 import { ExportAllModal } from '@/components/match/export-all-modal';
 import { errorMessage, isAbort, query } from '@/lib/api';
-import { STATUS_LABELS, cleanName, formatPhone, monthEnd, monthStart, mondayOf, number, shiftDay, structuredSummary, todayWib } from '@/lib/format';
+import { STATUS_LABELS, cleanName, formatPhone, monthEnd, monthStart, mondayOf, number, shiftDay, shiftMonth, structuredSummary, todayWib } from '@/lib/format';
 import type { Navigate } from '@/lib/router';
 import { useCompany } from '@/lib/session';
 import { useData, useDebounced } from '@/lib/use-data';
@@ -27,16 +27,20 @@ function presets(): Preset[] {
   const lastMonthEnd = shiftDay(monthStart(today), -1);
   return [
     { id: 'all', label: 'Semua tanggal', range: () => ({ from: '', to: '' }) },
+    { id: 'today', label: 'Hari ini', range: () => ({ from: today, to: today }) },
+    { id: 'last_1_month', label: '1 bulan terakhir', range: () => ({ from: shiftMonth(today, -1), to: today }) },
+    { id: 'last_3_months', label: '3 bulan terakhir', range: () => ({ from: shiftMonth(today, -3), to: today }) },
     { id: 'month', label: 'Bulan ini', range: () => ({ from: monthStart(today), to: monthEnd(today) }) },
     { id: 'week', label: 'Minggu ini', range: () => ({ from: monday, to: shiftDay(monday, 6) }) },
     { id: 'last_month', label: 'Bulan lalu', range: () => ({ from: monthStart(lastMonthEnd), to: lastMonthEnd }) },
   ];
 }
 
-type ListFilters = { temps: MatchFilter[]; stock: EntityStatus[]; period: Period; publicId: string; phones: string };
+type ListFilters = { temps: MatchFilter[]; stock: EntityStatus[]; buyerPeriod: Period; listingPeriod: Period; publicId: string; phones: string };
 type RowsResponse = { rows: Row[]; has_more: boolean };
 type Base = Record<string, string>;
-const OPEN_FILTERS: Partial<ListFilters> = { period: { preset: 'all', from: '', to: '' }, temps: ['hot', 'warm', 'unmatched'], stock: ['ready'], publicId: '', phones: '' };
+const ALL_PERIOD: Period = { preset: 'all', from: '', to: '' };
+const OPEN_FILTERS: Partial<ListFilters> = { buyerPeriod: ALL_PERIOD, listingPeriod: ALL_PERIOD, temps: ['hot', 'warm', 'unmatched'], stock: ['ready'], publicId: '', phones: '' };
 
 function toggle<T>(list: T[], item: T) {
   return list.includes(item) ? list.filter((value) => value !== item) : [...list, item];
@@ -50,14 +54,14 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   // A link naming one item or one sales number must show everything of theirs, not only Hot/Warm matches that are still Ready.
   const fromLink = !!(params?.get('id') || params?.get('nomor'));
   const [filters, setFilters] = useState<ListFilters>({
-    temps: fromLink ? ['hot', 'warm', 'unmatched'] : ['hot', 'warm'], stock: fromLink ? ['ready', 'on_hold', 'sold'] : ['ready'], period: { preset: 'all', from: '', to: '' }, publicId: params?.get('id') ?? '', phones: params?.get('nomor') ?? '',
+    temps: fromLink ? ['hot', 'warm', 'unmatched'] : ['hot', 'warm'], stock: fromLink ? ['ready', 'on_hold', 'sold'] : ['ready'], buyerPeriod: ALL_PERIOD, listingPeriod: ALL_PERIOD, publicId: params?.get('id') ?? '', phones: params?.get('nomor') ?? '',
   });
   const [prefsReady, setPrefsReady] = useState(false);
   // Arriving with a specific ID or phone number: show the plain list so the card is right there.
   const [grouped, setGrouped] = useState(!params?.get('id') && !params?.get('nomor'));
   // Arriving from a link that names one item opens straight into its recommendations.
   const [mobileDetail, setMobileDetail] = useState(() => !!params?.get('id'));
-  const [markers, setMarkers] = useState<Record<string, number>>({});
+  const [markers, setMarkers] = useState<Record<Direction, Record<string, number>>>({ buyer: {}, property: {} });
   const urlDirection = params?.get('arah');
 
   // Remember the last direction and the Hot/Warm choice per person.
@@ -80,22 +84,23 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   const useGroups = direction === 'property' && grouped;
   const base = useMemo<Base>(() => ({
     direction, search, statuses: filters.temps.join(','), stock_status: filters.stock.join(',') || 'ready',
-    public_id: debouncedId, phones: direction === 'property' ? debouncedPhones : '', date_from: filters.period.from, date_to: filters.period.to,
-  }), [direction, search, filters.temps, filters.stock, debouncedId, debouncedPhones, filters.period.from, filters.period.to]);
+    public_id: debouncedId, phones: direction === 'property' ? debouncedPhones : '',
+    buyer_date_from: filters.buyerPeriod.from, buyer_date_to: filters.buyerPeriod.to,
+    listing_date_from: filters.listingPeriod.from, listing_date_to: filters.listingPeriod.to,
+  }), [direction, search, filters.temps, filters.stock, debouncedId, debouncedPhones, filters.buyerPeriod, filters.listingPeriod]);
 
   // Every change of a filter goes through here, so the open detail view closes with it.
   const update = (patch: Partial<ListFilters>) => { setFilters((current) => ({ ...current, ...patch })); setMobileDetail(false); };
   function changeDirection(next: Direction) {
     setDirection(next);
     setFilters((current) => ({ ...current, phones: '', publicId: '' }));
-    setMarkers({});
     setMobileDetail(false);
   }
 
-  const loadMarkers = useCallback((monthIso: string) => {
-    void api.get<{ counts: Record<string, number> }>(`/workspace/dates?${query({ direction, date_from: monthIso, date_to: shiftDay(monthIso, 62) })}`)
-      .then((result) => setMarkers((current) => ({ ...current, ...result.counts }))).catch(() => {});
-  }, [api, direction]);
+  const loadMarkers = useCallback((kind: Direction, monthIso: string) => {
+    void api.get<{ counts: Record<string, number> }>(`/workspace/dates?${query({ direction: kind, date_from: monthIso, date_to: shiftDay(monthIso, 62) })}`)
+      .then((result) => setMarkers((current) => ({ ...current, [kind]: { ...current[kind], ...result.counts } }))).catch(() => {});
+  }, [api]);
 
   const sourceLabel = direction === 'buyer' ? 'buyer' : 'listing';
   const targetLabel = direction === 'buyer' ? 'listing' : 'buyer';
@@ -116,8 +121,19 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
       </fieldset>
 
       <Panel bodyClassName="space-y-4" className={cn(mobileDetail && 'hidden xl:block')}>
-        <div><p className="mb-2 flex items-center gap-2 text-base font-bold"><ListFilter className="size-5 text-accent" aria-hidden="true" />Tanggal posting</p>
-          <PeriodPicker value={filters.period} onChange={(period) => update({ period })} presets={presets()} max={todayWib()} markers={markers} onMonthChange={loadMarkers} />
+        <div className="space-y-4">
+          <p className="flex items-center gap-2 text-base font-bold"><ListFilter className="size-5 text-accent" aria-hidden="true" />Periode pencocokan</p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onPress={() => update({ buyerPeriod: { preset: 'today', from: todayWib(), to: todayWib() }, listingPeriod: { preset: 'last_3_months', from: shiftMonth(todayWib(), -3), to: todayWib() } })}>Buyer hari ini × stok 3 bulan</Button>
+            <Button variant="secondary" onPress={() => update({ buyerPeriod: { preset: 'last_1_month', from: shiftMonth(todayWib(), -1), to: todayWib() }, listingPeriod: { preset: 'today', from: todayWib(), to: todayWib() } })}>Listing hari ini × buyer 1 bulan</Button>
+          </div>
+          {([{ kind: 'buyer', key: 'buyerPeriod', label: 'Tanggal posting buyer' }, { kind: 'property', key: 'listingPeriod', label: 'Tanggal posting listing' }] as const).map(({ kind, key, label }) => (
+            <div key={key} className="space-y-2">
+              <p className="text-base font-semibold">{label}</p>
+              <PeriodPicker label={label} value={filters[key]} onChange={(period) => update({ [key]: period })} presets={presets()} max={todayWib()} markers={markers[kind]} onMonthChange={(month) => loadMarkers(kind, month)} />
+            </div>
+          ))}
+          <p className="text-sm text-muted">Periode buyer dan listing berlaku pada kedua arah pencocokan, termasuk hasil dan PDF. “Bulan lalu” adalah bulan kalender sebelumnya; “1 bulan terakhir” dihitung mundur dari hari ini.</p>
         </div>
         <div>
           <p className="mb-2 text-base font-bold">Tampilkan hasil</p>
@@ -202,7 +218,9 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
   const active = selected ?? linked;
   const recs = useData((signal) => api.post<{ groups: Group[] }>('/workspace/recommendations', {
     direction, ids: [active?.id], target_status: includeHold ? ['ready', 'on_hold'] : ['ready'],
-  }, signal), [active?.id, direction, includeHold, tick], !!active);
+    buyer_date_from: base.buyer_date_from, buyer_date_to: base.buyer_date_to,
+    listing_date_from: base.listing_date_from, listing_date_to: base.listing_date_to,
+  }, signal), [active?.id, direction, includeHold, tick, base], !!active);
 
   const select = useCallback((row: Row) => {
     setSelected(row);
@@ -223,7 +241,9 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
     setExporting(true);
     try {
       const pairs = picked.map((key) => { const [source_id, target_id] = key.split(':'); return { source_id, target_id: target_id || null }; });
-      const blob = await api.blob('/export/pdf', { direction, pairs });
+      const blob = await api.blob('/export/pdf', { direction, pairs, target_status: includeHold ? ['ready', 'on_hold'] : ['ready'],
+        buyer_date_from: base.buyer_date_from, buyer_date_to: base.buyer_date_to,
+        listing_date_from: base.listing_date_from, listing_date_to: base.listing_date_to });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url; link.download = 'XM-Matching-Report.pdf'; link.click();

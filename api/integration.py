@@ -23,7 +23,8 @@ from db import connect
 from export_all import Filters, MAX_PAGES, Part, folder, group_filename, merge_pdf_parts, part, plan, temperatures
 from parser import normalize_phone
 from tenant import workspace_id, workspace_scope
-from workspace import date_filter, stock_statuses
+from workspace import stock_statuses
+from periods import RelativePeriod, WIB
 
 router = APIRouter(prefix='/integration')
 FILE_DIR = Path(os.getenv('XM_INTEGRATION_EXPORT_DIR', '/data/integration-exports'))
@@ -111,6 +112,9 @@ class ExportRequest(Filters):
     stock_status: str = Field(default='ready', max_length=64)
     phones: str = Field(default='', max_length=20000)
     recipients: dict[str, str] = Field(default_factory=dict, max_length=10000)
+    recipient_names: dict[str, str] = Field(default_factory=dict, max_length=10000)
+    buyer_period: RelativePeriod | None = None
+    listing_period: RelativePeriod | None = None
 
     @field_validator('request_id')
     @classmethod
@@ -130,13 +134,27 @@ class ExportRequest(Filters):
             cleaned[key] = normalized
         return cleaned
 
+    @field_validator('recipient_names')
+    @classmethod
+    def name_values(cls, value):
+        if any(not name.strip() or len(name) > 200 for name in value.values()):
+            raise ValueError('Nama penerima wajib diisi, maksimal 200 karakter.')
+        return {key: name.strip() for key, name in value.items()}
+
+    @field_validator('delivery_scope')
+    @classmethod
+    def scope_value(cls, value):
+        return value.strip()
+
 
 def job_response(row):
     expired = row.get('expires_at') and row['expires_at'] <= datetime.now(timezone.utc)
     status = 'expired' if expired else row['status']
     return {'job_id': row['id'], 'request_id': row['request_id'], 'status': status,
             'group_by': row['payload']['group_by'], 'direction': row['payload']['direction'],
-            'progress': row['progress'], 'files': row['files'] if status == 'completed' else [],
+            'progress': row['progress'], 'files': [{k: v for k, v in item.items() if k != 'entity_pairs'}
+                                                 for item in row['files']] if status == 'completed' else [],
+            'periods': {k: row['payload'].get(k, '') for k in ('buyer_date_from', 'buyer_date_to', 'listing_date_from', 'listing_date_to')},
             'error': row['error'], 'created_at': row['created_at'], 'expires_at': row['expires_at'],
             'status_url': f"/api/integration/exports/{row['id']}", 'poll_after_seconds': 3}
 
@@ -147,15 +165,34 @@ def create_export(payload: ExportRequest):
         raise HTTPException(400, 'Status hasil harus hot, warm, atau unmatched.')
     temperatures(payload)
     stock_statuses(payload.stock_status)
-    date_filter(payload.date_from, payload.date_to, payload.time_from, payload.time_to)
-    data = payload.model_dump()
+    payload.windows(payload.direction)
+    if payload.delivery_scope and 'unmatched' in payload.statuses.split(','):
+        raise HTTPException(400, 'Report pasangan baru hanya mendukung Hot dan Warm.')
     # Freeze the company setting so later preference changes cannot change an in-flight job.
     with connect() as conn:
         existing = conn.execute('SELECT * FROM xm.export_jobs WHERE company_id=%s AND request_id=%s',
                                 (workspace_id(), payload.request_id)).fetchone()
+        # Retries on another WIB date must retain the original job's windows.
+        today = (existing['created_at'] if existing else datetime.now(timezone.utc)).astimezone(WIB).date()
+        if existing and existing['payload'].get('_period_day'):
+            from datetime import date
+            today = date.fromisoformat(existing['payload']['_period_day'])
+        data = payload.model_dump()
+        if payload.buyer_period or payload.listing_period:
+            if payload.date_from or payload.date_to:
+                raise HTTPException(400, 'Gunakan periode buyer/listing tanpa tanggal sumber lama.')
+            data['_period_day'] = today.isoformat()
+        for kind in ('buyer', 'listing'):
+            period = getattr(payload, kind + '_period')
+            if period:
+                if getattr(payload, kind + '_date_from') or getattr(payload, kind + '_date_to'):
+                    raise HTTPException(400, f'Pilih periode relatif atau tanggal {kind}, jangan keduanya.')
+                data[kind + '_date_from'], data[kind + '_date_to'] = period.resolve(today)
+        # Backward-compatible requests did not have these fields in stored payloads.
+        old_data = {**ExportRequest(request_id=payload.request_id).model_dump(), **existing['payload']} if existing else None
         if existing:
             candidate = {**data, 'group_by': payload.group_by or existing['payload']['group_by']}
-            if existing['payload'] != candidate:
+            if old_data != candidate:
                 raise HTTPException(409, 'request_id sudah digunakan dengan filter atau penerima berbeda.')
             return job_response(existing)
         if data['group_by'] is None:
@@ -171,6 +208,48 @@ def create_export(payload: ExportRequest):
                 raise HTTPException(409, 'request_id sudah digunakan dengan filter atau penerima berbeda.')
         conn.commit()
     return job_response(row)
+
+
+class DeliveryReceipt(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    delivery_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator('delivery_id')
+    @classmethod
+    def clean_id(cls, value):
+        if not value.strip():
+            raise ValueError('ID bukti pengiriman wajib diisi.')
+        return value.strip()
+
+
+@router.post('/exports/{job_id}/files/{file_id}/delivered')
+def confirm_delivery(job_id: uuid.UUID, file_id: uuid.UUID, payload: DeliveryReceipt):
+    """The consumer calls this only after WhatsApp confirms the file was sent."""
+    with connect() as conn:
+        row = conn.execute('SELECT * FROM xm.export_jobs WHERE id=%s AND company_id=%s FOR UPDATE',
+                           (job_id, workspace_id())).fetchone()
+        if not row:
+            raise HTTPException(404, 'Job export tidak ditemukan.')
+        if job_response(row)['status'] != 'completed':
+            raise HTTPException(409, 'Export belum selesai atau sudah kedaluwarsa.')
+        item = next((item for item in row['files'] if item['file_id'] == str(file_id)), None)
+        if item is None:
+            raise HTTPException(404, 'File export tidak ditemukan.')
+        if item['recipient_status'] != 'ready':
+            raise HTTPException(409, 'Penerima file masih perlu diperiksa.')
+        scope = row['payload'].get('delivery_scope', '')
+        if not scope:
+            raise HTTPException(409, 'Export ini tidak memiliki delivery_scope.')
+        if not item.get('delivered_at'):
+            for buyer, listing in item.get('entity_pairs', []):
+                conn.execute('''INSERT INTO xm.match_deliveries(company_id,delivery_scope,buyer_entity_id,listing_entity_id,delivery_id)
+                  VALUES(%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING''', (workspace_id(), scope, buyer, listing, payload.delivery_id))
+            item['delivered_at'] = datetime.now(timezone.utc).isoformat()
+            item['delivery_id'] = payload.delivery_id
+            conn.execute('UPDATE xm.export_jobs SET files=%s::jsonb WHERE id=%s AND company_id=%s',
+                         (json.dumps(row['files']), job_id, workspace_id()))
+        conn.commit()
+    return {'file_id': str(file_id), 'delivered_at': item['delivered_at'], 'delivery_id': item['delivery_id']}
 
 
 def read_job(job_id):
@@ -257,12 +336,13 @@ def render_job(job):
         for index, group in enumerate(groups):
             if group['pages'] + 1 > MAX_PAGES:
                 raise HTTPException(400, f"Kelompok {group['title'][:100]} melebihi batas {MAX_PAGES} halaman.")
-            offset, first = 0, page
+            offset, first, entity_pairs = 0, page, set()
             while offset is not None:
                 if not update_progress(job['id'], progress):
                     return
                 done = part(Part(**filters.model_dump(), token=token, index=index, group_key=group['key'], offset=offset, first_page=page), None)
                 page += done['pages']
+                entity_pairs.update(tuple(pair) for pair in done['entity_pairs'])
                 offset = done['next_offset']
                 progress['pages_done'] = page - 1
             parts = sorted(folder(token).glob(f'{index:05d}-*.pdf'))
@@ -278,6 +358,8 @@ def render_job(job):
                 files.append({'file_id': str(file_id), 'group_key': group['key'], 'group_name': group['title'],
                               'contact_name': group['contact_name'], 'contact_phone': group['phone'],
                               'recipient_phone': recipient, 'recipient_status': state, 'recipient_reason': reason,
+                              'recipient_name': payload.get('recipient_names', {}).get(group['key'], group['contact_name']),
+                              'entity_pairs': sorted(entity_pairs),
                               'filename': filename, 'mime': 'application/pdf', 'size_bytes': len(content),
                               'source_count': group['sources'], 'source_type': 'buyer' if filters.direction == 'buyer' else 'listing',
                               'page_count': count, 'first_page': first, 'last_page': first + count - 1,

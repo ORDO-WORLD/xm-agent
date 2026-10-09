@@ -58,7 +58,36 @@ def ready(conn):
     return bool(conn.execute("SELECT 1 FROM xm.workspace_cache_state WHERE company_id=current_setting('xm.workspace_id')").fetchone())
 
 
-def _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key, per_key=False):
+def target_window(direction, clause='', date_params=()):
+    """Keep a posting within the target window, even if a later copy exists."""
+    kind = 'property_listing' if direction == 'buyer' else 'buyer_request'
+    if not clause:
+        return '''target_eligible AS (
+          SELECT g.group_id,g.group_id id,g.entity_id,g.public_id,g.status,g.duplicate_count,g.last_seen_at
+          FROM xm.document_groups g WHERE g.company_id=current_setting('xm.workspace_id')
+            AND g.document_type=%s AND g.status='ready'
+        )''', [kind]
+    sql = '''target_eligible AS (
+      SELECT DISTINCT ON (g.group_id) g.group_id,d.id,g.entity_id,g.public_id,g.status,g.duplicate_count,g.last_seen_at
+      FROM xm.document_groups g JOIN xm.document_group_members tm ON tm.group_id=g.group_id
+      JOIN xm.documents d ON d.id=tm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      WHERE g.company_id=current_setting('xm.workspace_id') AND d.company_id=g.company_id
+        AND d.active AND g.document_type=%s AND g.status='ready' ''' + clause + '''
+      ORDER BY g.group_id,r.sent_at DESC NULLS LAST,d.id
+    )'''
+    return sql, [kind, *date_params]
+
+
+def unsent_clause(scope, buyer='b.entity_id', listing='p.entity_id'):
+    if not scope:
+        return '', []
+    return f''' AND NOT EXISTS (SELECT 1 FROM xm.match_deliveries delivered
+      WHERE delivered.company_id=current_setting('xm.workspace_id') AND delivered.delivery_scope=%s
+        AND delivered.buyer_entity_id={buyer} AND delivered.listing_entity_id={listing})''', [scope]
+
+
+def _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key, per_key=False,
+              target_clause='', target_params=(), delivery_scope=''):
     """Shared CTE: one representative posting per group, after every list filter.
 
     ``per_key`` keeps one posting per group *and* sender/phone, so a text posted by two sales counts for both,
@@ -66,18 +95,36 @@ def _eligible(direction, search, phones, statuses, clause, date_params, stock_st
     kind = 'buyer_request' if direction == 'buyer' else 'property_listing'
     from parser import normalize_phone
     selected = set(statuses.split(','))
+    prefix, params, count_join = '', [], ''
+    hot, warm = 'g.hot_count', 'g.warm_count'
+    if target_clause or delivery_scope:
+        targets, target_values = target_window(direction, target_clause, target_params)
+        source, target = ('buyer_group_id', 'property_group_id') if direction == 'buyer' else ('property_group_id', 'buyer_group_id')
+        unseen, unseen_values = unsent_clause(delivery_scope)
+        prefix = targets + f''', pair_counts AS (
+          SELECT m.{source} group_id,count(*) FILTER(WHERE m.score>=80) hot_count,
+            count(*) FILTER(WHERE m.score<80) warm_count
+          FROM xm.group_matches m JOIN target_eligible t ON t.group_id=m.{target}
+          JOIN xm.document_groups b ON b.group_id=m.buyer_group_id
+          JOIN xm.document_groups p ON p.group_id=m.property_group_id
+          WHERE m.company_id=current_setting('xm.workspace_id'){unseen} GROUP BY m.{source}
+        ), '''
+        params += target_values + unseen_values
+        count_join = ' LEFT JOIN pair_counts pc ON pc.group_id=g.group_id'
+        hot, warm = 'coalesce(pc.hot_count,0)', 'coalesce(pc.warm_count,0)'
     filters = []
-    if 'hot' in selected: filters.append('g.hot_count>0')
-    if 'warm' in selected: filters.append('g.warm_count>0')
-    if 'unmatched' in selected: filters.append('g.hot_count+g.warm_count=0')
-    params = [kind, list(stock_statuses)]
+    if 'hot' in selected: filters.append(f'{hot}>0')
+    if 'warm' in selected: filters.append(f'{warm}>0')
+    if 'unmatched' in selected: filters.append(f'{hot}+{warm}=0')
+    params += [kind, list(stock_statuses)]
     key_sql = GROUP_KEYS[group_by] if group_by in GROUP_KEYS else "''"
     distinct = 'g.group_id' + (f',{key_sql}' if per_key else '')
-    sql = f'''eligible AS (
+    sql = prefix + f'''eligible AS (
       SELECT DISTINCT ON ({distinct}) d.id,g.group_id,r.sent_at,r.author,d.contact_phone,d.contact_name,
-        {key_sql} AS group_key,count(*) OVER(PARTITION BY g.group_id) duplicate_count
+        {key_sql} AS group_key,{hot} hot_count,{warm} warm_count,
+        count(*) OVER(PARTITION BY g.group_id) duplicate_count
       FROM xm.document_groups g JOIN xm.document_group_members gm ON gm.group_id=g.group_id
-      JOIN xm.documents d ON d.id=gm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      JOIN xm.documents d ON d.id=gm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id{count_join}
       WHERE g.company_id=current_setting('xm.workspace_id') AND d.active AND g.document_type=%s AND g.status=ANY(%s)
         AND (''' + (' OR '.join(filters) or 'false') + ')'
     search_clause, search_params = search_filter(search)
@@ -109,12 +156,14 @@ def _eligible(direction, search, phones, statuses, clause, date_params, stock_st
 
 
 def sources(conn, direction, search, phones, statuses, clause, date_params, offset,
-            stock_statuses=DEFAULT_TARGET_STATUSES, public_id='', group_by=None, group_key=None):
-    eligible, params = _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key)
+            stock_statuses=DEFAULT_TARGET_STATUSES, public_id='', group_by=None, group_key=None,
+            target_clause='', target_params=()):
+    eligible, params = _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key,
+                                 target_clause=target_clause, target_params=target_params)
     # No text equality or matching aggregation on the interactive read path.
     query = 'WITH ' + eligible + ''', page AS (SELECT * FROM eligible ORDER BY sent_at DESC NULLS LAST,id LIMIT 201 OFFSET %s)
       SELECT d.*,r.raw_text,r.chat_name,r.sent_at,r.author,p.duplicate_count,g.last_seen_at,g.public_id,g.status AS entity_status,
-        g.hot_count,g.warm_count,g.hot_count+g.warm_count match_count
+        p.hot_count,p.warm_count,p.hot_count+p.warm_count match_count
       FROM page p JOIN xm.documents d ON d.id=p.id JOIN xm.raw_messages r ON r.id=d.raw_message_id
       JOIN xm.document_groups g ON g.group_id=p.group_id ORDER BY p.sent_at DESC NULLS LAST,p.id'''
     params.append(max(0, offset))
@@ -123,11 +172,13 @@ def sources(conn, direction, search, phones, statuses, clause, date_params, offs
 
 
 def group_summary(conn, direction, search, phones, statuses, clause, date_params,
-                  stock_statuses=DEFAULT_TARGET_STATUSES, public_id='', group_by='sender', group_search='', limit=200, offset=0):
+                  stock_statuses=DEFAULT_TARGET_STATUSES, public_id='', group_by='sender', group_search='', limit=200, offset=0,
+                  target_clause='', target_params=()):
     """Listings per sender or per phone number, with the same filters as the card list."""
     if group_by not in GROUP_KEYS:
         raise HTTPException(400, 'Pengelompokan tidak dikenal.')
-    eligible, params = _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, None)
+    eligible, params = _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, None,
+                                 target_clause=target_clause, target_params=target_params)
     having = ''
     if group_search.strip():
         having = " HAVING e.group_key ILIKE %s OR coalesce(mode() WITHIN GROUP (ORDER BY e.contact_name),'') ILIKE %s"
@@ -136,8 +187,8 @@ def group_summary(conn, direction, search, phones, statuses, clause, date_params
     limit = min(max(limit, 1), 300)
     query = 'WITH ' + eligible + f'''
       SELECT e.group_key AS key,count(*) AS count,
-             count(*) FILTER (WHERE g.hot_count>0) AS hot,
-             count(*) FILTER (WHERE g.warm_count>0 AND g.hot_count=0) AS warm,
+             count(*) FILTER (WHERE e.hot_count>0) AS hot,
+             count(*) FILTER (WHERE e.warm_count>0 AND e.hot_count=0) AS warm,
              max(e.sent_at) AS latest_at,
              mode() WITHIN GROUP (ORDER BY e.contact_name) AS contact_name,
              count(DISTINCT e.author) AS sender_count
@@ -149,19 +200,31 @@ def group_summary(conn, direction, search, phones, statuses, clause, date_params
     return {'group_by': group_by, 'groups': rows[:limit], 'has_more': len(rows) > limit}
 
 
-def recommendations(conn, direction, ids, target_statuses=DEFAULT_TARGET_STATUSES):
+def recommendations(conn, direction, ids, target_statuses=DEFAULT_TARGET_STATUSES, target_clause='', target_params=(), delivery_scope='',
+                    source_clause='', source_params=()):
     kind='buyer_request' if direction=='buyer' else 'property_listing'
     relation,other=('buyer_group_id','property_group_id') if direction=='buyer' else ('property_group_id','buyer_group_id')
     sources=conn.execute('''SELECT d.*,r.raw_text,r.chat_name,r.sent_at,r.author,g.public_id,g.status AS entity_status
       FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
       LEFT JOIN xm.document_group_members sm ON sm.document_id=d.id
       LEFT JOIN xm.document_groups g ON g.group_id=sm.group_id
-      WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''',(ids,kind)).fetchall()
-    rows=conn.execute(f'''SELECT s.document_id source_id,m.score,m.explanation,m.id match_id,d.*,r.raw_text,r.chat_name,r.sent_at,r.author,
+      WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''' + source_clause,
+      [ids,kind,*source_params]).fetchall()
+    ids = [source['id'] for source in sources]
+    # Target status may include on-hold for an explicitly requested detail view.
+    targets, values = target_window(direction, target_clause, target_params)
+    targets = targets.replace("g.status='ready'", 'g.status=ANY(%s)')
+    values.insert(1, list(target_statuses))
+    unseen, unseen_values = unsent_clause(delivery_scope)
+    rows=conn.execute(f'''WITH {targets}
+      SELECT s.document_id source_id,m.score,m.explanation,m.id match_id,d.*,r.raw_text,r.chat_name,r.sent_at,r.author,
         g.duplicate_count,g.last_seen_at,g.public_id,g.status AS entity_status
       FROM xm.document_group_members s JOIN xm.group_matches gm ON gm.{relation}=s.group_id
-      JOIN xm.matches m ON m.id=gm.match_id JOIN xm.document_groups g ON g.group_id=gm.{other}
-      JOIN xm.documents d ON d.id=g.group_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
-      WHERE s.company_id=current_setting('xm.workspace_id') AND s.document_id=ANY(%s) AND d.active AND g.status=ANY(%s)
-      ORDER BY m.score DESC,g.last_seen_at DESC NULLS LAST,d.id''',(ids,list(target_statuses))).fetchall()
+      JOIN xm.matches m ON m.id=gm.match_id JOIN target_eligible g ON g.group_id=gm.{other}
+      JOIN xm.document_groups b ON b.group_id=gm.buyer_group_id
+      JOIN xm.document_groups p ON p.group_id=gm.property_group_id
+      JOIN xm.documents d ON d.id=g.id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      WHERE s.company_id=current_setting('xm.workspace_id') AND gm.company_id=s.company_id
+        AND s.document_id=ANY(%s) AND d.active{unseen}
+      ORDER BY m.score DESC,r.sent_at DESC NULLS LAST,d.id''',values + [ids] + unseen_values).fetchall()
     return {'groups':[{'source':s,'recommendations':[r for r in rows if r['source_id']==s['id']]} for s in sources]}

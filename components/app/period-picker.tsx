@@ -119,12 +119,12 @@ export function RangeButton({ value, onChange, max, markers, onMonthChange, acti
 }
 
 /** Quick periods as big pill buttons plus a free date range. Scrolls sideways on a phone. */
-export function PeriodPicker({ value, onChange, presets, max, markers, onMonthChange, className }: {
+export function PeriodPicker({ value, onChange, presets, max, markers, onMonthChange, className, label = 'Periode' }: {
   value: Period; onChange: (period: Period) => void; presets: Preset[]; max?: string;
-  markers?: Record<string, number>; onMonthChange?: (monthStartIso: string) => void; className?: string;
+  markers?: Record<string, number>; onMonthChange?: (monthStartIso: string) => void; className?: string; label?: string;
 }) {
   return (
-    <fieldset aria-label="Periode" className={cn('xm-scroll-x m-0 -mx-4 flex min-w-0 gap-2 border-0 px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0', className)}>
+    <fieldset aria-label={label} className={cn('xm-scroll-x m-0 -mx-4 flex min-w-0 gap-2 border-0 px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0', className)}>
       {presets.map((preset) => {
         const selected = value.preset === preset.id;
         return (
@@ -137,4 +137,3 @@ export function PeriodPicker({ value, onChange, presets, max, markers, onMonthCh
     </fieldset>
   );
 }
-

@@ -430,3 +430,14 @@ CREATE TABLE IF NOT EXISTS xm.export_jobs (
 );
 CREATE INDEX IF NOT EXISTS export_jobs_pending_idx ON xm.export_jobs(created_at) WHERE status IN ('queued','processing');
 CREATE INDEX IF NOT EXISTS export_jobs_company_idx ON xm.export_jobs(company_id, created_at DESC);
+
+-- Delivery receipts survive cache rebuilds, reposts and PDF retention cleanup.
+CREATE TABLE IF NOT EXISTS xm.match_deliveries (
+ company_id text NOT NULL,
+ delivery_scope text NOT NULL,
+ buyer_entity_id uuid NOT NULL REFERENCES xm.entities(entity_id) ON DELETE CASCADE,
+ listing_entity_id uuid NOT NULL REFERENCES xm.entities(entity_id) ON DELETE CASCADE,
+ delivered_at timestamptz NOT NULL DEFAULT now(),
+ delivery_id text NOT NULL,
+ PRIMARY KEY(company_id, delivery_scope, buyer_entity_id, listing_entity_id)
+);
