@@ -21,12 +21,14 @@ from parser import parse_message
 from qdrant import ensure_collection
 from qdrant import query as qdrant_query
 from qdrant import status as qdrant_status
-from access import PUBLIC_PATHS, SESSION_PATHS, required_role, role_allows
+from access import SESSION_PATHS, is_public, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
 from integration import authenticate as integration_authenticate, is_export_path, router as integration_router
 from entities import migrate_v4
 from runtime_cache import cached_stats
 from matching_scope import document_scope_filter, history_scope_filter
+import activity
+from activity import actor_scope, quote, number
 
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
@@ -74,7 +76,7 @@ async def require_login(request: Request, call_next):
             response.headers['Cache-Control'] = 'private, no-store'
             response.headers['Vary'] = 'Authorization'
             return response
-    if path not in PUBLIC_PATHS:
+    if not is_public(path):
         user = current_user(request)
         if not user:
             return JSONResponse({'detail': 'Sesi login diperlukan'}, status_code=401)
@@ -102,7 +104,9 @@ async def require_login(request: Request, call_next):
                     return JSONResponse({'detail': 'Akun tujuan tidak ditemukan'}, status_code=404)
         if not owner.get('workspace_id'):
             return JSONResponse({'detail': 'Workspace akun belum siap'}, status_code=503)
-        with workspace_scope(owner['workspace_id'], owner['id']):
+        # Inside another account's company the administrator is still the one acting.
+        as_admin = owner.get('workspace_id') != user.get('workspace_id')
+        with workspace_scope(owner['workspace_id'], owner['id']), actor_scope(user, as_admin):
             response = await call_next(request)
             response.headers['Cache-Control'] = 'private, no-store'
             response.headers['Vary'] = 'Cookie, X-XM-User-Id'
@@ -155,6 +159,8 @@ def load_stats():
 
 @app.get("/imports")
 def imports():
+    # The page refreshes itself while a file is processed, so repeats are not counted.
+    activity.record_view('page.open', 'membuka Unggah Data', bump=False)
     with connect() as conn:
         scope_sql, scope_params = history_scope_filter(conn)
         return conn.execute(
@@ -202,6 +208,9 @@ async def upload_import(file: UploadFile = File(...), agent_name: str | None = F
         ).fetchone()
         if existing:
             destination.unlink(missing_ok=True)
+            activity.record(conn, 'change', 'import.upload',
+                            f'mengunggah {quote(file.filename)} sebagai sumber {resolved_agent}, tetapi isinya sudah pernah diunggah (dilewati)',
+                            {'file': file.filename, 'sumber': resolved_agent, 'duplikat': True})
             # Do not silently ignore a new mode on an already imported file.
             # Rebuild the existing data without creating duplicate messages or
             # relabelling known pairs as new upload discoveries.
@@ -218,11 +227,14 @@ async def upload_import(file: UploadFile = File(...), agent_name: str | None = F
                         WHERE company_id=current_setting('xm.workspace_id') AND status IN ('queued','processing'))""", (uuid.uuid4(),))
                     conn.commit()
                     return {"id": existing['id'], "status": existing['status'], "duplicate": True, "recomputing": True, "matching_mode": mode}
+            conn.commit()
             return {"id": existing["id"], "status": existing["status"], "duplicate": True, "matching_mode": existing['matching_mode']}
         conn.execute(
             "INSERT INTO xm.imports(id, agent_name, file_name, file_path, file_sha256, matching_mode) VALUES (%s,%s,%s,%s,%s,%s)",
             (import_id, resolved_agent, file.filename, str(destination), digest.hexdigest(), mode),
         )
+        activity.record(conn, 'change', 'import.upload', f'mengunggah {quote(file.filename)} sebagai sumber {resolved_agent}',
+                        {'file': file.filename, 'sumber': resolved_agent})
         conn.commit()
     return {"id": import_id, "status": "queued", "duplicate": False, "agent_name": resolved_agent, "matching_mode": mode}
 
@@ -401,6 +413,7 @@ def batch_buyer_recommendations(payload: BuyerBatchRequest):
         row["temperature"] = "hot" if float(row["score"]) >= 80 else "warm"
         by_buyer[str(row["buyer_request_id"])].append(row)
     buyer_map = {str(row["id"]): row for row in buyers}
+    activity.record_view('match.detail', f'membuka rekomendasi untuk {len(buyer_map)} buyer')
     groups = [
         {"buyer": buyer_map[str(item)], "recommendations": by_buyer[str(item)]}
         for item in buyer_ids if str(item) in buyer_map
@@ -416,7 +429,9 @@ def get_settings():
 
 @app.post("/matches/recompute")
 def recompute():
-    return {"matches": recompute_matches()}
+    count = recompute_matches()
+    activity.record_now('change', 'match.recompute', f'menghitung ulang semua match: {number(count)} match', {'match': count})
+    return {"matches": count}
 
 
 @app.get("/agent/search")
@@ -504,3 +519,6 @@ from export_all import router as export_all_router
 app.include_router(export_all_router)
 from deploy import router as deploy_router
 app.include_router(deploy_router)
+from autoaudit_routes import router as autoaudit_router
+app.include_router(autoaudit_router)
+app.include_router(activity.router)

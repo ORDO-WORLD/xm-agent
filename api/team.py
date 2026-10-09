@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from psycopg.errors import UniqueViolation
 
+import activity
 from auth import _password_hash, current_user, public_user
 from db import connect
 from tenant import workspace_id
@@ -38,6 +39,7 @@ def can_edit(requester_role: str, target_role: str) -> bool:
 @router.get('/users')
 def list_members(request: Request):
     me = current_user(request)
+    activity.record_view('page.open', 'membuka Tim & Akses')
     with connect() as conn:
         rows = conn.execute(
             """SELECT id, email, display_name, role, is_locked, created_at FROM xm.users
@@ -63,6 +65,8 @@ def add_member(payload: NewMember, request: Request):
                    VALUES (%s, %s, %s, %s, %s, current_setting('xm.workspace_id')) RETURNING *""",
                 (uuid.uuid4(), payload.email.strip().lower(), payload.display_name.strip(),
                  _password_hash(payload.password), payload.role)).fetchone()
+            activity.record(conn, 'account', 'team.add', f"menambah akun {user['email']} sebagai {activity.ROLE_LABEL[user['role']]}",
+                            {'email': user['email'], 'nama': user['display_name'], 'peran': user['role']})
             conn.commit()
             return {**public_user(user), 'editable': True, 'is_self': False}
     except UniqueViolation:
@@ -94,6 +98,23 @@ def edit_member(user_id: uuid.UUID, payload: EditMember, request: Request):
                  _password_hash(payload.password) if payload.password else target['password_hash'], role, user_id)).fetchone()
             if payload.password or email != target['email']:
                 conn.execute('DELETE FROM xm.sessions WHERE user_id = %s', (user_id,))
+            parts = []
+            if email != target['email']:
+                parts.append(f'mengubah email menjadi {email}')
+            if updated['display_name'] != target['display_name']:
+                parts.append(f"mengubah nama menjadi {activity.quote(updated['display_name'])}")
+            if updated['is_locked'] != target['is_locked']:
+                parts.append('mengunci akun' if updated['is_locked'] else 'membuka kunci akun')
+            if role != target['role']:
+                parts.append(f'mengubah peran menjadi {activity.ROLE_LABEL[role]}')
+            if payload.password:
+                parts.append('mereset password')
+            if parts:
+                activity.record(conn, 'account', 'team.edit', f"akun {target['email']}: " + ', '.join(parts), {
+                    'akun': target['email'],
+                    'sebelum': {'email': target['email'], 'nama': target['display_name'], 'terkunci': target['is_locked'], 'peran': target['role']},
+                    'sesudah': {'email': email, 'nama': updated['display_name'], 'terkunci': updated['is_locked'], 'peran': role},
+                    'password_direset': bool(payload.password)})
             conn.commit()
             return {**public_user(updated), 'editable': True, 'is_self': updated['id'] == me['id']}
     except UniqueViolation:

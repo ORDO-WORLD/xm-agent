@@ -3,6 +3,7 @@ import json
 import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+import activity
 from db import connect
 from location_index import parse_table, LocationIndex, key
 
@@ -95,5 +96,8 @@ def import_locations(payload: ImportLocations):
         if not job:
             job=conn.execute('INSERT INTO xm.maintenance_jobs(id) VALUES(%s) RETURNING *',(uuid.uuid4(),)).fetchone()
         conn.execute("INSERT INTO xm.audit_events(event_type,entity_type,details) VALUES('locations_imported','location_index',%s::jsonb)",(json.dumps(result),))
+        activity.record(conn, 'change', 'location.import',
+                        f"mengimpor indeks lokasi {activity.quote(payload.source_name)}: {activity.number(result['clusters'])} cluster, {activity.number(result['pairs'])} pasangan jarak",
+                        {'sumber': payload.source_name, **result})
         conn.commit()
     return {**result,'unchanged':False,'job':job}

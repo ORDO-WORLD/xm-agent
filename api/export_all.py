@@ -21,6 +21,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+import activity
 import workspace_cache
 from company import company_row
 from db import connect
@@ -263,8 +264,10 @@ def download(token: uuid.UUID, output: Literal['single', 'grouped'] = 'single'):
     if not parts:
         raise HTTPException(404, 'File export tidak ditemukan. Mulai export lagi.')
     if output == 'single':
-        content, _ = merge_pdf_parts(parts)
+        content, pages = merge_pdf_parts(parts)
         media_type, filename = 'application/pdf', 'Semua-Pencocokan.pdf'
+        activity.record_now('export', 'export.all', f'mengunduh semua match dalam satu PDF: {activity.number(pages)} halaman',
+                            {'halaman': pages, 'bagian': len(parts)})
     else:
         archive = BytesIO()
         with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -279,6 +282,8 @@ def download(token: uuid.UUID, output: Literal['single', 'grouped'] = 'single'):
                 bundle.writestr(filename, content)
         content = archive.getvalue()
         media_type, filename = 'application/zip', 'Semua-Pencocokan.zip'
+        activity.record_now('export', 'export.all', f'mengunduh semua match sebagai ZIP: {activity.number(len(indexes))} kelompok',
+                            {'kelompok': len(indexes), 'bagian': len(parts)})
     return Response(content, media_type=media_type,
                     headers={'Content-Disposition': f'attachment; filename="{filename}"'},
                     background=BackgroundTask(shutil.rmtree, target, True))

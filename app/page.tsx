@@ -19,6 +19,7 @@ const UploadPage = dynamic(() => import('@/components/pages/upload-page'), { ssr
 const TeamPage = dynamic(() => import('@/components/pages/team-page'), { ssr: false, loading });
 const SettingsPage = dynamic(() => import('@/components/pages/settings-page'), { ssr: false, loading });
 const CompaniesPage = dynamic(() => import('@/components/pages/companies-page'), { ssr: false, loading });
+const ActivityPage = dynamic(() => import('@/components/pages/activity-page'), { ssr: false, loading });
 
 function Workspace() {
   const { path, params, navigate } = useRoute();
@@ -32,7 +33,7 @@ function Workspace() {
   if (!company) page = 'beranda';
   else if (page === 'data' && !perms?.upload_data) page = 'beranda';
   else if (page === 'tim' && !perms?.manage_team) page = 'beranda';
-  else if (page === 'perusahaan' && user.role !== 'admin') page = 'beranda';
+  else if ((page === 'perusahaan' || page === 'aktivitas') && user.role !== 'admin') page = 'beranda';
   // The platform administrator starts in the company list, not in an empty personal workspace.
   if (user.role === 'admin' && !target && path === 'beranda' && !window.location.hash) page = 'beranda';
 
@@ -44,7 +45,8 @@ function Workspace() {
       case 'data': return <UploadPage navigate={navigate} />;
       case 'tim': return <TeamPage />;
       case 'pengaturan': return <SettingsPage params={params} navigate={navigate} />;
-      case 'perusahaan': return <CompaniesPage />;
+      case 'perusahaan': return <CompaniesPage navigate={navigate} />;
+      case 'aktivitas': return <ActivityPage params={params} navigate={navigate} />;
       default: return <DashboardPage navigate={navigate} params={params} />;
     }
   })();

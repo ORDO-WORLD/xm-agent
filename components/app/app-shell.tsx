@@ -2,7 +2,7 @@
 
 import { type ReactNode } from 'react';
 import { Avatar, Button, Drawer, useOverlayState } from '@heroui/react';
-import { Boxes, Building2, ChevronRight, LayoutDashboard, LogOut, Menu, Settings, Sparkles, UploadCloud, Users, Workflow } from 'lucide-react';
+import { Boxes, Building2, ScrollText, ChevronRight, LayoutDashboard, LogOut, Menu, Settings, Sparkles, UploadCloud, Users, Workflow } from 'lucide-react';
 import { initials } from '@/lib/format';
 import { useCompany, useManage, useSession } from '@/lib/session';
 import { cn } from '@/lib/utils';
@@ -27,7 +27,10 @@ function useNav() {
     ...(perms?.manage_team ? [{ id: 'tim', label: 'Tim & Akses', icon: Users }] : []),
     { id: 'pengaturan', label: 'Pengaturan', icon: Settings },
   ];
-  const platform: NavItem[] = user.role === 'admin' && !target ? [{ id: 'perusahaan', label: 'Perusahaan', icon: Building2 }] : user.role === 'admin' ? [{ id: 'perusahaan', label: 'Semua perusahaan', icon: Building2 }] : [];
+  const platform: NavItem[] = user.role !== 'admin' ? [] : [
+    { id: 'perusahaan', label: target ? 'Semua perusahaan' : 'Perusahaan', icon: Building2 },
+    { id: 'aktivitas', label: 'Aktivitas', icon: ScrollText },
+  ];
   return { main, manage, platform };
 }
 

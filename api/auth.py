@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 
+import activity
 from db import connect
 from tenant import provision_workspace
 
@@ -92,6 +93,13 @@ def login(payload: LoginRequest, response: Response):
             """SELECT u.*, ap.company_name FROM xm.users u
                LEFT JOIN xm.app_preferences ap ON ap.company_id=u.workspace_id WHERE u.email=%s""", (email,)).fetchone()
         if not user or not _password_matches(payload.password, user["password_hash"]):
+            # Only the address that was tried is kept; the password never reaches the log.
+            who = {'id': user['id'] if user else None, 'display_name': user['display_name'] if user else email,
+                   'email': email, 'role': user['role'] if user else None}
+            activity.record(conn, 'account', 'auth.login_failed',
+                            f'gagal masuk dengan email {email} ({"password salah" if user else "akun tidak ada"})',
+                            {'email': email}, failed=True, actor=who, company_id=user['workspace_id'] if user else None, merge=True)
+            conn.commit()
             raise HTTPException(401, "Email atau password tidak sesuai")
         token = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
@@ -100,6 +108,7 @@ def login(payload: LoginRequest, response: Response):
             "INSERT INTO xm.sessions(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)",
             (uuid.uuid4(), user["id"], hashlib.sha256(token.encode()).hexdigest(), expires_at),
         )
+        activity.record(conn, 'account', 'auth.login', 'masuk', actor=user, company_id=user['workspace_id'])
         conn.commit()
     response.set_cookie(
         COOKIE_NAME,
@@ -130,6 +139,9 @@ def logout(request: Request, response: Response):
                 "DELETE FROM xm.sessions WHERE token_hash=%s",
                 (hashlib.sha256(token.encode()).hexdigest(),),
             )
+            user = current_user(request)
+            if user:
+                activity.record(conn, 'account', 'auth.logout', 'keluar', actor=user, company_id=user['workspace_id'])
             conn.commit()
     response.delete_cookie(COOKIE_NAME, path="/")
 
@@ -156,4 +168,5 @@ def change_password(payload: PasswordChange, request: Request):
         # Other devices must sign in again with the new password; this session continues.
         conn.execute('DELETE FROM xm.sessions WHERE user_id=%s AND token_hash<>%s',
                      (user['id'], hashlib.sha256(token.encode()).hexdigest()))
+        activity.record(conn, 'account', 'auth.password', 'mengganti password sendiri', actor=user, company_id=user['workspace_id'])
         conn.commit()

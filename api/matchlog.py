@@ -12,6 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
+import activity
 from auth import current_user
 from db import connect
 from tenant import owner_id
@@ -172,6 +173,8 @@ def recent_days(date_from: str, date_to: str, include_inactive: bool = False,
     """Per-day counts for the calendar: how many new matches were found on each Jakarta day."""
     start, end = wib_bounds(date_from, date_to)
     allowed = _filters(include_inactive)
+    # Only the Match Terbaru page asks for its calendar.
+    activity.record_view('page.open', 'membuka Match Terbaru')
     with connect() as conn:
         scope_sql, scope_params = history_scope_filter(conn, direction)
         rows = conn.execute(
