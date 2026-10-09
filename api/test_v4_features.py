@@ -496,6 +496,78 @@ class StockMonitorTests(V4Case):
         self.assertEqual(self.call(other, '/stock/log')['rows'], [])
 
 
+class ExportAllTests(V4Case):
+    """Every match of the current filters in one PDF, a section per sender or phone number."""
+    def seed(self):
+        return self.run_import([(BUYER_HOUSE, '~ Rina'), (BUYER_RUKO, '~ Tono'), (LISTING_HOUSE_A, '~ Andi'), (LISTING_HOUSE_B, '~ Andi'),
+                                (LISTING_RUKO, '~ Citra'), ('Dijual gudang Sidoarjo LT 500 Harga 5 M\nContact: Lain 081355500011', '~ Citra')])
+
+    def plan(self, client=None, **filters):
+        return self.call(client or self.staff, '/export/all/plan', 'POST', {'direction': 'property', 'statuses': 'hot,warm', **filters})
+
+    def export(self, **filters):
+        """Drive the export the way the browser does; returns the plan and the text of every page."""
+        import io
+        from pypdf import PdfReader
+        filters = {'direction': 'property', 'statuses': 'hot,warm', **filters}
+        plan, page = self.plan(**filters), 1
+        for index, group in enumerate(plan['groups']):
+            offset = 0
+            while offset is not None:
+                done = self.call(self.staff, '/export/all/part', 'POST', {**filters, 'token': plan['token'], 'index': index,
+                                                                           'group_key': group['key'], 'offset': offset, 'first_page': page})
+                page, offset = page + done['pages'], done['next_offset']
+        pdf = self.call(self.staff, f"/export/all/{plan['token']}/download")
+        return plan, [item.extract_text() for item in PdfReader(io.BytesIO(pdf)).pages]
+
+    def test_plan_counts_follow_filters_and_company_grouping(self):
+        self.seed()
+        plan = self.plan()
+        self.assertEqual(plan['group_by'], 'sender')
+        self.assertEqual({g['key']: g['sources'] for g in plan['groups']}, {'~ Andi': 2, '~ Citra': 1})
+        self.assertEqual(plan['totals']['pages'], plan['totals']['hot'] + plan['totals']['warm'])
+        self.assertEqual(plan['totals']['unmatched'], 0)
+        # "Belum cocok" adds the listing nobody asked for.
+        wide = self.plan(statuses='hot,warm,unmatched')
+        self.assertEqual((wide['totals']['sources'], wide['totals']['unmatched']), (4, 1))
+        self.assertEqual(wide['totals']['pages'], plan['totals']['pages'] + 1)
+        # The company's own grouping decides the sections.
+        self.call(self.boss, '/company/settings', 'PUT', {'listing_group_by': 'phone'})
+        by_phone = self.plan()
+        self.assertEqual(by_phone['group_by'], 'phone')
+        self.assertEqual({g['key'] for g in by_phone['groups']}, {'6281234567890', SALES_A, SALES_B})
+        self.assertIn('Sari · +62 822-3374-4657', [g['title'] for g in by_phone['groups']])
+        self.assertEqual(self.plan(phones=SALES_A)['totals']['sources'], 1)
+        self.call(self.staff, '/export/all/plan', 'POST', {'statuses': ''}, status=400)
+
+    def test_one_pdf_with_a_section_per_sales(self):
+        self.seed()
+        plan, pages = self.export(statuses='hot,warm,unmatched')
+        self.assertEqual(len(pages), plan['totals']['pages'] + len(plan['groups']))
+        covers = [text for text in pages if 'Pengirim' in text]
+        self.assertEqual(len(covers), 2)
+        self.assertIn('~ Andi', covers[0])
+        self.assertIn('2 listing', covers[0])
+        self.assertTrue(any('Belum cocok' in text and 'gudang' in text for text in pages))
+        self.assertTrue(any('Buyer request rumah' in text and 'Budi' in text for text in pages))
+        # Page numbers run through the whole file, and the parts are gone after the download.
+        self.assertIn(f'| {len(pages)}', pages[-1])
+        self.call(self.staff, f"/export/all/{plan['token']}/download", status=404)
+
+    def test_buyer_direction_and_company_isolation(self):
+        self.seed()
+        plan, pages = self.export(direction='buyer')
+        self.assertEqual({g['key'] for g in plan['groups']}, {'~ Rina', '~ Tono'})
+        self.assertEqual(len(pages), plan['totals']['pages'] + 2)
+        _, _, other = self.make_company('Other')
+        self.assertEqual(self.plan(other)['groups'], [])
+        started = self.plan()
+        self.call(self.staff, '/export/all/part', 'POST', {'direction': 'property', 'token': started['token'], 'index': 0, 'group_key': '~ Andi'})
+        self.call(other, f"/export/all/{started['token']}/download", status=404)
+        self.call(self.staff, '/export/all/cancel', 'POST', {'token': started['token']})
+        self.call(self.staff, f"/export/all/{started['token']}/download", status=404)
+
+
 class DashboardTests(V4Case):
     def test_overview_numbers_for_a_period(self):
         self.run_import([

@@ -58,8 +58,11 @@ def ready(conn):
     return bool(conn.execute("SELECT 1 FROM xm.workspace_cache_state WHERE company_id=current_setting('xm.workspace_id')").fetchone())
 
 
-def _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key):
-    """Shared CTE: one representative posting per group, after every list filter."""
+def _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key, per_key=False):
+    """Shared CTE: one representative posting per group, after every list filter.
+
+    ``per_key`` keeps one posting per group *and* sender/phone, so a text posted by two sales counts for both,
+    exactly as it does when the list is read one sender/phone at a time with ``group_key``."""
     kind = 'buyer_request' if direction == 'buyer' else 'property_listing'
     from parser import normalize_phone
     selected = set(statuses.split(','))
@@ -69,8 +72,9 @@ def _eligible(direction, search, phones, statuses, clause, date_params, stock_st
     if 'unmatched' in selected: filters.append('g.hot_count+g.warm_count=0')
     params = [kind, list(stock_statuses)]
     key_sql = GROUP_KEYS[group_by] if group_by in GROUP_KEYS else "''"
+    distinct = 'g.group_id' + (f',{key_sql}' if per_key else '')
     sql = f'''eligible AS (
-      SELECT DISTINCT ON (g.group_id) d.id,g.group_id,r.sent_at,r.author,d.contact_phone,d.contact_name,
+      SELECT DISTINCT ON ({distinct}) d.id,g.group_id,r.sent_at,r.author,d.contact_phone,d.contact_name,
         {key_sql} AS group_key,count(*) OVER(PARTITION BY g.group_id) duplicate_count
       FROM xm.document_groups g JOIN xm.document_group_members gm ON gm.group_id=g.group_id
       JOIN xm.documents d ON d.id=gm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
@@ -100,7 +104,7 @@ def _eligible(direction, search, phones, statuses, clause, date_params, stock_st
         params.append(group_key)
     sql += clause
     params += date_params
-    sql += ' ORDER BY g.group_id,r.sent_at DESC NULLS LAST,d.id\n    )'
+    sql += f' ORDER BY {distinct},r.sent_at DESC NULLS LAST,d.id\n    )'
     return sql, params
 
 

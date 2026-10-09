@@ -65,10 +65,14 @@ export function useStatusActions(onChanged: () => void): { request: (request: St
 
   const apply = useCallback(async (request: StatusRequest) => {
     setBusy(true);
+    // The API takes 200 at a time; "Pilih semua" can hand over far more.
+    const send = async (status: EntityStatus) => {
+      for (let start = 0; start < request.refs.length; start += 200) await api.post('/entities/status', { ids: request.refs.slice(start, start + 200), status });
+    };
     try {
-      await api.post('/entities/status', { ids: request.refs, status: request.status });
+      await send(request.status);
       const undo = request.previous && request.previous !== request.status
-        ? { children: 'Urungkan', variant: 'tertiary' as const, onPress: () => { void api.post('/entities/status', { ids: request.refs, status: request.previous }).then(() => { onChanged(); refresh(); }).catch((reason) => toast.danger(errorMessage(reason))); } }
+        ? { children: 'Urungkan', variant: 'tertiary' as const, onPress: () => { const previous = request.previous; if (previous) void send(previous).then(() => { onChanged(); refresh(); }).catch((reason) => toast.danger(errorMessage(reason))); } }
         : undefined;
       toast.success(`${request.name} ditandai ${STATUS_LABELS[request.status]}`, { timeout: 8000, ...(undo ? { actionProps: undo } : {}) });
       onChanged();

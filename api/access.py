@@ -17,6 +17,7 @@ MEMBER_WRITES = {
     ('POST', '/buyers/recommendations/batch'), ('POST', '/auth/logout'), ('PUT', '/auth/password'),
     ('POST', '/entities/status'), ('PUT', '/search-default/personal'), ('DELETE', '/search-default/personal'),
     ('POST', '/matches/recent/seen'),
+    ('POST', '/export/all/plan'), ('POST', '/export/all/part'), ('POST', '/export/all/cancel'),
 }
 
 

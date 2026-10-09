@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Accordion, Button, Chip, Label, SearchField, Switch, ToggleButton, ToggleButtonGroup, toast } from '@heroui/react';
+import { Accordion, Button, Chip, Label, SearchField, Switch, ToggleButton, ToggleButtonGroup, toast, useOverlayState } from '@heroui/react';
 import { ArrowLeft, Building2, Download, FileText, ListChecks, ListFilter, SlidersHorizontal, Trash2, UsersRound, X } from 'lucide-react';
 import { EmptyState, ErrorNotice, LoadingRows, PageHeader, Panel, Segmented } from '@/components/app/primitives';
 import { PeriodPicker, type Period, type Preset } from '@/components/app/period-picker';
 import { useStatusActions } from '@/components/app/status-menu';
 import { RecommendationCard, SourceCard } from '@/components/match/cards';
+import { ExportAllModal } from '@/components/match/export-all-modal';
 import { errorMessage, isAbort, query } from '@/lib/api';
 import { STATUS_LABELS, cleanName, formatPhone, monthEnd, monthStart, mondayOf, number, shiftDay, structuredSummary, todayWib } from '@/lib/format';
 import type { Navigate } from '@/lib/router';
@@ -187,6 +188,8 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
   const [exporting, setExporting] = useState(false);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulk, setBulk] = useState<Record<string, Row>>({});
+  const [selectingAll, setSelectingAll] = useState(false);
+  const exportAll = useOverlayState();
 
   const bump = useCallback(() => setTick((value) => value + 1), []);
   const { request: requestStatus, dialog: statusDialog } = useStatusActions(bump);
@@ -249,7 +252,23 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
     setBulk({});
     setBulkMode(false);
   }
-  const bulkProps = (row: Row) => bulkMode ? { checked: !!bulk[row.id], onToggle: () => setBulk((current) => { const next = { ...current }; if (next[row.id]) delete next[row.id]; else next[row.id] = row; return next; }) } : undefined;
+  // The same buyer or listing can be shown through different copies of its message, so a choice follows the entity.
+  const bulkKey = (row: Row) => row.entity_id ?? row.id;
+  const bulkProps = (row: Row) => bulkMode ? { checked: !!bulk[bulkKey(row)], onToggle: () => setBulk((current) => { const next = { ...current }; if (next[bulkKey(row)]) delete next[bulkKey(row)]; else next[bulkKey(row)] = row; return next; }) } : undefined;
+
+  /** Everything the filters return: later pages and unopened groups too, not only the cards on screen. */
+  async function selectAll() {
+    setSelectingAll(true);
+    try {
+      const all: Record<string, Row> = {};
+      for (let next = 0; ; next += PAGE) {
+        const page = await api.get<RowsResponse>(`/workspace?${query({ ...base, offset: next })}`);
+        for (const row of page.rows) all[bulkKey(row)] = row;
+        if (!page.has_more) break;
+      }
+      setBulk(all);
+    } catch (reason) { toast.danger(errorMessage(reason, 'Belum dapat memilih semua. Coba lagi.')); } finally { setSelectingAll(false); }
+  }
   const card = (row: Row, withSender = true) => (
     <SourceCard key={row.id} row={row} direction={direction} selected={active?.id === row.id} showSender={withSender}
       onSelect={() => select(row)} onStatus={(status) => changeSource(row, status)} bulk={bulkProps(row)} />
@@ -269,6 +288,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
                 </Switch>
               )}
               <Button variant={bulkMode ? 'primary' : 'secondary'} onPress={() => { setBulkMode((value) => !value); setBulk({}); }}><ListChecks className="size-4" aria-hidden="true" />{bulkMode ? 'Selesai memilih' : 'Pilih beberapa'}</Button>
+              <Button variant="secondary" onPress={() => exportAll.open()}><Download className="size-4" aria-hidden="true" />Export semua PDF</Button>
             </div>
           </div>
           {direction === 'property' && grouped && canSetGrouping && <GroupBySwitch value={groupBy} />}
@@ -383,7 +403,11 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
 
       {bulkMode && (
         <div className="pb-safe fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 rounded-3xl border border-border bg-surface p-3 shadow-2xl lg:inset-x-auto lg:bottom-6 lg:left-[calc(18rem+2.5rem)] lg:right-10">
-          <span className="px-2 text-base font-bold">{bulkRows.length} dipilih</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="px-2 text-base font-bold">{number(bulkRows.length)} dipilih</span>
+            <Button variant="secondary" isPending={selectingAll} onPress={selectAll}><ListChecks className="size-4" aria-hidden="true" />Pilih semua</Button>
+            <Button variant="tertiary" isDisabled={!bulkRows.length || selectingAll} onPress={() => setBulk({})}>Batal pilih semua</Button>
+          </div>
           <div className="flex flex-wrap gap-2">
             {(['ready', 'on_hold', 'sold'] as const).map((status) => <Button key={status} variant="secondary" isDisabled={!bulkRows.length} onPress={() => applyBulk(status)}>{STATUS_LABELS[status]}</Button>)}
             <Button variant="danger-soft" isDisabled={!bulkRows.length} onPress={() => applyBulk('deleted')}><Trash2 className="size-4" aria-hidden="true" />Hapus</Button>
@@ -392,6 +416,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
         </div>
       )}
       {statusDialog}
+      <ExportAllModal state={exportAll} direction={direction} filters={base} />
     </>
   );
 }

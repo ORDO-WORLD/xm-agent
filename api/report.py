@@ -93,7 +93,44 @@ def fit_paragraph(text, width=TEXT_WIDTH, height=BODY_HEIGHT):
     return paragraph, used_height
 
 
-def build_report(pairs, direction):
+def latin(text):
+    """The built-in PDF fonts only know Latin-1 style characters; drop the rest (emoji and the like)."""
+    return (text or '').encode('cp1252', 'ignore').decode('cp1252').strip()
+
+
+def draw_cover(pdf, cover, logo, generated):
+    """First page of a section in the export of every match: whose matches follow, and how many."""
+    right = PAGE_WIDTH - MARGIN
+    pdf.drawImage(logo, MARGIN, PAGE_HEIGHT - 77, width=170, height=69, mask='auto', preserveAspectRatio=True)
+    pdf.setFont('Helvetica', 10)
+    pdf.setFillColor(HexColor('#53617b'))
+    pdf.drawRightString(right, PAGE_HEIGHT - 35, 'Generated on: ' + generated)
+    pdf.setStrokeColor(HexColor('#dbe3ef'))
+    pdf.line(MARGIN, PAGE_HEIGHT - 85, right, PAGE_HEIGHT - 85)
+    pdf.setFont('Helvetica', 14)
+    pdf.drawString(MARGIN, PAGE_HEIGHT - 250, cover['kind'])
+    pdf.setFillColor(HexColor('#1645a0'))
+    title = latin(cover['title']) or '-'
+    size = 30
+    while size > 12 and pdf.stringWidth(title, 'Helvetica-Bold', size) > right - MARGIN:
+        size -= 1
+    pdf.setFont('Helvetica-Bold', size)
+    pdf.drawString(MARGIN, PAGE_HEIGHT - 290, title)
+    source = 'buyer' if cover['direction'] == 'buyer' else 'listing'
+    lines = [(f'{cover["sources"]} {source}', '#25324b')]
+    if cover['hot']: lines.append((f'{cover["hot"]} kecocokan Hot', '#b91c1c'))
+    if cover['warm']: lines.append((f'{cover["warm"]} kecocokan Warm', '#b45309'))
+    if cover['unmatched']: lines.append((f'{cover["unmatched"]} belum cocok', '#53617b'))
+    pdf.setFont('Helvetica-Bold', 15)
+    for row, (text, color) in enumerate(lines):
+        pdf.setFillColor(HexColor(color))
+        pdf.drawString(MARGIN, PAGE_HEIGHT - 340 - row * 26, text)
+    pdf.showPage()
+
+
+def build_report(pairs, direction, section=None, cover=None, first_page=1):
+    """One page per pair. With ``section`` the pages belong to one sales inside a larger export:
+    the header names that sales and the footer continues the page numbers of the whole file."""
     output = BytesIO()
     pdf = canvas.Canvas(output, pagesize=A4)
     pdf.setTitle('XM Property Matchmaker')
@@ -103,15 +140,20 @@ def build_report(pairs, direction):
     logo = Path('/assets/brand-auto-audit.png')
     if not logo.exists():
         logo = Path(__file__).resolve().parent.parent / 'public/brand-auto-audit.png'
+    logo = ImageReader(str(logo))  # decoded once, not once per page
     right = PAGE_WIDTH - MARGIN
     labels = ['Buyer request','Property listing'] if direction == 'buyer' else ['Property listing','Buyer request']
+    section = latin(section)[:60] if section is not None else None
+    if cover:
+        draw_cover(pdf, cover, logo, generated)
+        first_page += 1
     for index, (source, target) in enumerate(pairs, 1):
-        pdf.drawImage(ImageReader(str(logo)), MARGIN, PAGE_HEIGHT - 77,
+        pdf.drawImage(logo, MARGIN, PAGE_HEIGHT - 77,
                       width=170, height=69, mask='auto', preserveAspectRatio=True)
         pdf.setFont('Helvetica', 10)
         pdf.setFillColor(HexColor('#53617b'))
         pdf.drawRightString(right, PAGE_HEIGHT - 35, 'Generated on: ' + generated)
-        pdf.drawRightString(right, PAGE_HEIGHT - 55, f'Pilihan {index} / {len(pairs)}')
+        pdf.drawRightString(right, PAGE_HEIGHT - 55, section if section is not None else f'Pilihan {index} / {len(pairs)}')
         pdf.setStrokeColor(HexColor('#dbe3ef'))
         pdf.line(MARGIN, PAGE_HEIGHT - 85, right, PAGE_HEIGHT - 85)
         ids = [source.get('public_id'), target.get('public_id') if target else None]
@@ -151,7 +193,7 @@ def build_report(pairs, direction):
             pdf.drawString(MARGIN, 30, 'Belum cocok')
         pdf.setFillColor(HexColor('#53617b'))
         pdf.setFont('Helvetica', 9)
-        pdf.drawRightString(right, 30, f'XM Property Matchmaker | {index}')
+        pdf.drawRightString(right, 30, f'XM Property Matchmaker | {index if section is None else first_page + index - 1}')
         pdf.showPage()
     pdf.save()
     return output.getvalue()
