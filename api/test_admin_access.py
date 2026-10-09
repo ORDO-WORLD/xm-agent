@@ -35,7 +35,8 @@ class AccessPolicyTests(unittest.TestCase):
                           ('/index/recompute', 'POST'), ('/matches/recompute', 'POST'), ('/locations/import', 'POST'),
                           ('/location-index/import', 'POST'), ('/company/settings', 'PUT'), ('/stock/tracked', 'PUT'),
                           ('/stock/snapshot', 'POST'), ('/team/users', 'GET'), ('/team/users', 'POST'), ('/team/users/123', 'PUT')]
-    PLATFORM_ONLY = [('/admin/companies', 'GET'), ('/admin/companies', 'POST'), ('/admin/companies/x', 'PUT')]
+    PLATFORM_ONLY = [('/admin/companies', 'GET'), ('/admin/companies', 'POST'), ('/admin/companies/x', 'PUT'),
+                     ('/admin/deploy', 'GET'), ('/admin/deploy', 'POST')]
     MEMBER_OK = [('/settings', 'GET'), ('/search-default', 'GET'), ('/workspace', 'GET'), ('/workspace/groups', 'GET'),
                  ('/workspace/recommendations', 'POST'), ('/export/pdf', 'POST'), ('/preferences', 'PUT'),
                  ('/entities/status', 'POST'), ('/entities/lookup', 'GET'), ('/dashboard/overview', 'GET'),

@@ -460,3 +460,5 @@ from company import router as company_router
 app.include_router(company_router)
 from export_all import router as export_all_router
 app.include_router(export_all_router)
+from deploy import router as deploy_router
+app.include_router(deploy_router)

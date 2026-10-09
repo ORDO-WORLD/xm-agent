@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Button, Chip, Description, Input, Label, Modal, TextField, toast, useOverlayState } from '@heroui/react';
 import { Building2, LogIn, Pencil, Plus, UsersRound, Wand2 } from 'lucide-react';
+import { DeployPanel } from '@/components/app/deploy-panel';
 import { EmptyState, ErrorNotice, LoadingRows, Notice, PageHeader, Panel } from '@/components/app/primitives';
 import { generatePassword } from '@/components/pages/team-page';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
@@ -56,6 +57,7 @@ export default function CompaniesPage() {
           );
         })}
       </ul>
+      <DeployPanel />
       <CreateCompany state={create} onDone={reload} />
       <RenameCompany state={rename} company={renaming} onDone={reload} />
     </div>

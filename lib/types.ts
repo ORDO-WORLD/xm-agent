@@ -189,6 +189,16 @@ export type CompanySummary = {
   users: { id: string; email: string; display_name: string; role: Role; is_locked: boolean; created_at: string }[];
 };
 
+export type DeployStatus = { enabled: false } | {
+  enabled: true;
+  status: 'idle' | 'running' | 'success' | 'failed';
+  exit_code: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  commit: { sha: string; subject: string; date: string } | null;
+  log: string;
+};
+
 export type Dashboard = {
   period: { key: string; label: string; date_from: string; date_to: string; compare_from: string; compare_to: string; days: number; bucket: 'day' | 'week'; in_future: boolean };
   latest_data_date: string | null;
