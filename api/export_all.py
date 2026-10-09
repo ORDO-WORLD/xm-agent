@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
+import activity
 import workspace_cache
 from company import company_row
 from db import connect
@@ -164,6 +165,8 @@ def download(token: uuid.UUID):
     writer.compress_identical_objects()
     output = BytesIO()
     writer.write(output)
+    activity.record_now('export', 'export.all', f'mengunduh semua match dalam satu PDF: {activity.number(len(writer.pages))} halaman',
+                        {'halaman': len(writer.pages), 'bagian': len(parts)})
     return Response(output.getvalue(), media_type='application/pdf',
                     headers={'Content-Disposition': 'attachment; filename="Semua-Pencocokan.pdf"'},
                     background=BackgroundTask(shutil.rmtree, target, True))

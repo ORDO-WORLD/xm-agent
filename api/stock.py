@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+import activity
 from auth import current_user
 from db import connect
 from parser import normalize_phone
@@ -168,6 +169,11 @@ def save_tracked(payload: TrackedPayload, request: Request):
         added = [phone for phone in phones if phone not in existing]
         if added:
             snapshot_stock(conn, company_id, 'tracking', added, note='Mulai dipantau')
+        removed = [phone for phone in existing if phone not in phones]
+        parts = ([f"menambah nomor sales {', '.join(added[:5])}{' …' if len(added) > 5 else ''}"] if added else []) + \
+                ([f"menghapus nomor sales {', '.join(removed[:5])}{' …' if len(removed) > 5 else ''}"] if removed else [])
+        if parts:
+            activity.record(conn, 'change', 'stock.tracked', ', '.join(parts), {'ditambah': added, 'dihapus': removed})
         conn.commit()
         return _overview(conn, company_id)
 
@@ -177,6 +183,7 @@ def manual_snapshot():
     company_id = workspace_id()
     with connect() as conn:
         written = snapshot_stock(conn, company_id, 'manual', note='Dicatat manual')
+        activity.record(conn, 'change', 'stock.snapshot', f'mencatat stok sales secara manual ({written} nomor)')
         conn.commit()
         return {'logged': written, **_overview(conn, company_id)}
 
@@ -197,6 +204,12 @@ def stock_log(phone: str = '', date_from: str = '', date_to: str = '', limit: in
             params.append(datetime.combine(date.fromisoformat(date_to) + timedelta(days=1), time.min, WIB))
     except ValueError:
         raise HTTPException(400, 'Tanggal tidak valid.')
+    if offset <= 0:
+        # Only the Stok Sales page reads the stock log.
+        if phone.strip():
+            activity.record_view('stock.history', f'melihat riwayat stok sales {normalize_phone(phone)}')
+        else:
+            activity.record_view('page.open', 'membuka Stok Sales')
     with connect() as conn:
         rows = conn.execute(
             '''SELECT l.id, l.phone, l.logged_at, l.event_type, l.import_id, l.agent_name, l.total, l.ready, l.on_hold, l.sold,
@@ -278,5 +291,9 @@ def export_listings(phone: str = ''):
                 raise HTTPException(404, 'Nomor sales ini tidak dipantau.')
         names = {item['phone']: item['label'] or clean_contact_name(item['contact_name']) or 'Sales' for item in tracked}
         rows = export_rows(conn, company_id, list(names))
-    return Response(build_workbook(rows, names), media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    book = build_workbook(rows, names)
+    whose = f'sales {normalize_phone(phone)}' if phone.strip() else f'semua sales ({len(names)} nomor)'
+    activity.record_now('export', 'export.stock', f'mengekspor stok sales ke Excel: {whose}, {activity.number(len(rows))} listing',
+                        {'nomor': list(names), 'listing': len(rows)})
+    return Response(book, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     headers={'Content-Disposition': 'attachment; filename="stok-listing-sales.xlsx"'})

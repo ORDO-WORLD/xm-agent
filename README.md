@@ -58,6 +58,32 @@ Tiga peran:
 
 Akun terkunci menampilkan layar kosong dengan latar blur dan tautan WhatsApp admin. Hak akses ditegakkan di server pada setiap permintaan.
 
+## Sambungan AutoAudit
+
+Chat dari sales AutoAudit bisa masuk ke sebuah company tanpa unggah manual. Rancangannya ada di [docs/DESAIN_INTEGRASI_AUTOAUDIT_2026-10-09.md](docs/DESAIN_INTEGRASI_AUTOAUDIT_2026-10-09.md).
+
+- **Mengaktifkan:** isi `AUTOAUDIT_BASE_URL` dan `AUTOAUDIT_API_KEY` di environment backend (lihat `.env.example`), lalu jalankan ulang API dan worker. Tanpa keduanya fitur ini mati.
+- **Memasang company AutoAudit:** di menu Perusahaan, administrator platform memilih "Company AutoAudit" saat menambah company atau lewat ikon pensil. Tanpa itu company hanya bisa unggah manual.
+- **Menyambungkan:** admin company (atau administrator platform) membuka Unggah Data, memilih sales sumber, lalu menekan Sambungkan. Daftar sales hanya berisi sales dari company AutoAudit yang dipasang, dan server menolak sales di luar itu. Isi "Nama sumber" dengan nama yang sama seperti unggahan sebelumnya supaya pesan lama dikenali dan stok tidak tercatat dua kali.
+- **Kapan data ditarik:** worker mengecek tiap sambungan setiap `AUTOAUDIT_CHECK_SECONDS` (bawaan 10 menit) dan hanya mengunduh bila `last_updated_at` dataset berubah. Tombol **Sinkronkan sekarang** (admin company) langsung mengambil data yang tersedia saat itu.
+- **Webhook (opsional, supaya lebih cepat):** isi `AUTOAUDIT_WEBHOOK_TOKEN` dengan teks acak panjang, lalu di AutoAudit tambahkan langganan webhook dengan link `https://<alamat Property>/api/hooks/autoaudit/<token>` dan grup `sync`. Untuk lokal, arahkan ke tunnel HTTPS. Kiriman AutoAudit tidak bertanda tangan, jadi token itu satu-satunya pengaman; isi kiriman hanya dipakai sebagai tanda untuk mengecek lebih awal.
+- **Status:** Menunggu data (dataset belum ada atau impor sebelumnya masih diproses), Menarik, Terbaru sampai (waktu dataset), Gagal (dicoba lagi pada cek berikutnya).
+- **Uji baca:** `python3 scripts/autoaudit_probe.py` mencetak daftar sales; dengan `--sales-id`, `--start`, `--end`, dan `--manual-json` ia membandingkan sidik pesan API dengan file unggahan lama. Hanya memanggil `GET`.
+
+Semua panggilan ke AutoAudit bersifat baca. Property tidak pernah memicu sinkronisasi WhatsApp.
+
+## Log aktivitas
+
+Menu **Aktivitas** (hanya administrator platform) menampilkan siapa melakukan apa di semua company, dalam kalimat biasa. Company tidak dapat melihatnya dengan cara apa pun. Rancangannya ada di [docs/DESAIN_ACTIVITY_LOG_2026-10-09.md](docs/DESAIN_ACTIVITY_LOG_2026-10-09.md).
+
+- **Yang dicatat:** perubahan data dan pengaturan, urusan akun (termasuk gagal masuk), unduhan (PDF dan Excel), dan apa yang dilihat orang (buka halaman, pencarian, buka rekomendasi). Kejadian otomatis dari worker dan AutoAudit tercatat sebagai "Sistem".
+- **Tampilan:** bawaan hanya perubahan, akun, dan unduhan. Tombol **Sekadar melihat** menambahkan sisanya. Bisa disaring per company, orang, jenis, tanggal, dan kata. Dari kartu company di menu Perusahaan ada tautan **Lihat aktivitas**.
+- **Masa simpan:** catatan "sekadar melihat" dihapus worker setelah `ACTIVITY_VIEW_RETENTION_DAYS` hari (bawaan 90). Catatan lain disimpan selamanya.
+- **Jaminan:** perubahan dan catatannya disimpan dalam satu transaksi, jadi tidak ada perubahan tanpa jejak. Password, API key, token, dan isi chat tidak pernah dicatat. Log hanya bisa dibaca.
+- **Menambah aksi baru:** panggil `activity.record(conn, lapis, kode, kalimat, rincian)` sebelum `conn.commit()` dan daftarkan kodenya di `ACTIONS` (`api/activity.py`). Tes `test_activity.CoverageTests` gagal bila ada rute tulis baru yang belum dicatat atau dikecualikan.
+
+Log mulai terisi sejak versi ini dijalankan; kejadian sebelumnya tidak direkonstruksi.
+
 ## Backup lengkap
 
 Gunakan `scripts/backup-data.sh` untuk membuat dump PostgreSQL, snapshot Qdrant `xm_rag`, serta arsip file sumber. Panduan pemulihan tersedia di `docs/BACKUP_RESTORE.md`. Backup data sengaja tidak dilacak Git karena berisi percakapan dan nomor kontak.

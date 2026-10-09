@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { Button, Chip, Input, Label, ProgressBar, TextField } from '@heroui/react';
 import { ArrowRight, CheckCircle2, FileJson, History, TriangleAlert, UploadCloud } from 'lucide-react';
 import { EmptyState, ErrorNotice, Notice, PageHeader, Panel } from '@/components/app/primitives';
+import { AutoAuditCard } from '@/components/pages/autoaudit-card';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
 import { BorderBeam } from '@/components/magicui/border-beam';
 import { Confetti, type ConfettiRef } from '@/components/magicui/confetti';
@@ -123,6 +124,8 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
           </div>
         </div>
       )}
+
+      <AutoAuditCard onImported={reload} />
 
       <Panel title="1. Siapkan file" description="Seret file ke kotak di bawah, atau ketuk untuk memilih dari perangkat.">
         <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">

@@ -34,13 +34,16 @@ class AccessPolicyTests(unittest.TestCase):
     COMPANY_ADMIN_ONLY = [('/settings', 'PUT'), ('/glossary', 'PUT'), ('/search-default', 'PUT'), ('/imports', 'POST'),
                           ('/index/recompute', 'POST'), ('/matches/recompute', 'POST'), ('/locations/import', 'POST'),
                           ('/location-index/import', 'POST'), ('/company/settings', 'PUT'), ('/stock/tracked', 'PUT'),
-                          ('/stock/snapshot', 'POST'), ('/team/users', 'GET'), ('/team/users', 'POST'), ('/team/users/123', 'PUT')]
-    PLATFORM_ONLY = [('/admin/companies', 'GET'), ('/admin/companies', 'POST'), ('/admin/companies/x', 'PUT')]
+                          ('/stock/snapshot', 'POST'), ('/autoaudit/sources/x/sync', 'POST'), ('/autoaudit/options', 'GET'),
+                          ('/autoaudit/sources', 'POST'), ('/autoaudit/sources/x', 'DELETE'), ('/team/users', 'GET'), ('/team/users', 'POST'), ('/team/users/123', 'PUT')]
+    PLATFORM_ONLY = [('/admin/companies', 'GET'), ('/admin/companies', 'POST'), ('/admin/companies/x', 'PUT'),
+                     ('/admin/autoaudit/companies', 'GET'), ('/admin/autoaudit/link/x', 'PUT'),
+                     ('/admin/activity', 'GET'), ('/admin/activity/filters', 'GET')]
     MEMBER_OK = [('/settings', 'GET'), ('/search-default', 'GET'), ('/workspace', 'GET'), ('/workspace/groups', 'GET'),
                  ('/workspace/recommendations', 'POST'), ('/export/pdf', 'POST'), ('/preferences', 'PUT'),
                  ('/entities/status', 'POST'), ('/entities/lookup', 'GET'), ('/dashboard/overview', 'GET'),
                  ('/stock/overview', 'GET'), ('/stock/log', 'GET'), ('/matches/recent', 'GET'), ('/matches/recent/seen', 'POST'),
-                 ('/company/settings', 'GET'), ('/search-default/personal', 'PUT'), ('/auth/password', 'PUT')]
+                 ('/company/settings', 'GET'), ('/autoaudit/sources', 'GET'), ('/search-default/personal', 'PUT'), ('/auth/password', 'PUT')]
 
     def test_member_cannot_write_company_data_or_manage_accounts(self):
         for path, method in self.COMPANY_ADMIN_ONLY:

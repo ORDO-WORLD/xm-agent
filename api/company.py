@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from psycopg.errors import UniqueViolation
 
+import activity
 from access import permissions
 from auth import _password_hash, current_user
 from db import connect
@@ -42,6 +43,9 @@ def get_company_settings(request: Request):
         company = company_row(conn)
         mine = personal_terms(conn, owner_id() or user['id'])
         phones = tracked_phones(conn, workspace_id())
+    if request.method == 'GET' and user['role'] == 'admin' and user.get('workspace_id') != workspace_id():
+        # The screen loads this when the administrator steps into a company.
+        activity.record_view('company.enter', f"masuk ke company {company['company_name'] or workspace_id()}", layer='account', bump=False)
     return {
         'company_name': company['company_name'], 'listing_group_by': company['listing_group_by'],
         'search_locked': company['search_locked'], 'search_terms': company['search_terms'],
@@ -67,8 +71,19 @@ def put_company_settings(payload: CompanyUpdate, request: Request):
         # Column names come from the fixed model above, never from the client.
         sets = ', '.join(f'{column} = %s' for column in changes)
         with connect() as conn:
+            before = company_row(conn)
             conn.execute(f"UPDATE xm.app_preferences SET {sets}, updated_at = now() WHERE company_id = current_setting('xm.workspace_id')",
                          tuple(changes.values()))
+            parts = []
+            if 'company_name' in changes and changes['company_name'] != before['company_name']:
+                parts.append(f"mengubah nama company dari {activity.quote(before['company_name'] or '-')} ke {activity.quote(changes['company_name'])}")
+            if 'listing_group_by' in changes and changes['listing_group_by'] != before['listing_group_by']:
+                parts.append('mengelompokkan listing per ' + ('nomor telepon' if changes['listing_group_by'] == 'phone' else 'pengirim'))
+            if 'search_locked' in changes and changes['search_locked'] != before['search_locked']:
+                parts.append('mengunci kata kunci' if changes['search_locked'] else 'membuka kunci kata kunci')
+            if parts:
+                activity.record(conn, 'change', 'company.settings', ', '.join(parts),
+                                {'sebelum': {key: before[key] for key in changes}, 'sesudah': changes})
             conn.commit()
     return get_company_settings(request)
 
@@ -89,7 +104,7 @@ class RenameCompany(BaseModel):
 def _companies(conn, only=None):
     rows = conn.execute(
         """WITH ids AS (SELECT DISTINCT workspace_id AS company_id FROM xm.users WHERE workspace_id IS NOT NULL)
-           SELECT i.company_id, ap.company_name, ap.search_locked, ap.listing_group_by,
+           SELECT i.company_id, ap.company_name, ap.search_locked, ap.listing_group_by, ap.autoaudit_company_id, ap.autoaudit_company_name,
                   (SELECT count(*) FROM xm.document_groups g WHERE g.company_id = i.company_id AND g.document_type = 'buyer_request' AND g.status <> 'deleted') AS buyers,
                   (SELECT count(*) FROM xm.document_groups g WHERE g.company_id = i.company_id AND g.document_type = 'property_listing' AND g.status <> 'deleted') AS listings
            FROM ids i LEFT JOIN xm.app_preferences ap ON ap.company_id = i.company_id
@@ -112,6 +127,7 @@ def _companies(conn, only=None):
 
 @router.get('/admin/companies')
 def list_companies():
+    activity.record_view('page.open', 'membuka Perusahaan')
     with connect() as conn:
         return _companies(conn)
 
@@ -127,6 +143,9 @@ def create_company(payload: NewCompany):
                 (uuid.uuid4(), payload.admin_email.strip().lower(), payload.admin_name.strip(),
                  _password_hash(payload.password), company_id))
             provision_company(conn, company_id, payload.name.strip())
+            activity.record(conn, 'account', 'company.create',
+                            f'membuat company {activity.quote(payload.name.strip())} dengan admin {payload.admin_email.strip().lower()}',
+                            {'company': payload.name.strip(), 'admin': payload.admin_email.strip().lower()}, company_id=company_id)
             conn.commit()
             return _companies(conn, company_id)[0]
     except UniqueViolation:
@@ -136,9 +155,14 @@ def create_company(payload: NewCompany):
 @router.put('/admin/companies/{company_id}')
 def rename_company(company_id: str, payload: RenameCompany):
     with connect() as conn:
+        before = conn.execute('SELECT company_name FROM xm.app_preferences WHERE company_id = %s FOR UPDATE', (company_id,)).fetchone()
         updated = conn.execute('UPDATE xm.app_preferences SET company_name = %s, updated_at = now() WHERE company_id = %s RETURNING company_id',
                                (payload.name.strip(), company_id)).fetchone()
         if not updated:
             raise HTTPException(404, 'Company tidak ditemukan')
+        if before['company_name'] != payload.name.strip():
+            activity.record(conn, 'account', 'company.rename',
+                            f"mengubah nama company dari {activity.quote(before['company_name'] or company_id)} ke {activity.quote(payload.name.strip())}",
+                            {'sebelum': before['company_name'], 'sesudah': payload.name.strip()}, company_id=company_id)
         conn.commit()
         return _companies(conn, company_id)[0]

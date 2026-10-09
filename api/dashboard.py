@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
+import activity
 from db import connect
 from runtime_cache import cached_value
 from tenant import workspace_id
@@ -234,6 +235,7 @@ def _imports_version():
 @router.get('/overview')
 def overview(period: Literal['week', 'last_week', 'month', 'last_month', 'last30', 'custom'] = 'week',
              date_from: str = '', date_to: str = ''):
+    activity.record_view('page.open', 'membuka Beranda', {'periode': period})
     # Several people and tabs open the same period; the figures only need to be a few seconds fresh.
     # A finished upload is part of the key, so new data never hides behind a cached answer.
     return cached_value(workspace_id(), ('overview', period, date_from, date_to, _imports_version()), OVERVIEW_TTL,

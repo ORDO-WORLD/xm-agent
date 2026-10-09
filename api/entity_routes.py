@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+import activity
 from auth import current_user
 from db import connect
 from entities import lookup, set_entity_status, STATUSES
@@ -24,6 +25,17 @@ def change_status(payload: StatusChange, request: Request):
     user = current_user(request)
     with connect() as conn:
         result = set_entity_status(conn, workspace_id(), owner_id() or user['id'], payload.ids, payload.status, payload.note)
+        changed = result['updated']
+        if changed:
+            label = activity.STATUS_LABEL[payload.status]
+            if len(changed) == 1:
+                text = f"mengubah status {changed[0]['public_id']} dari {activity.STATUS_LABEL[changed[0]['previous']]} ke {label}"
+            else:
+                text = f"mengubah status {len(changed)} data ke {label} ({', '.join(item['public_id'] for item in changed[:4])}{', …' if len(changed) > 4 else ''})"
+            note = (payload.note or '').strip()
+            activity.record(conn, 'change', 'entity.status', text + (f', catatan: {activity.quote(note)}' if note else ''), {
+                'ke': label, 'catatan': note or None,
+                'data': [{'id': item['public_id'], 'dari': activity.STATUS_LABEL[item['previous']]} for item in changed]})
         conn.commit()
     invalidate_stats(workspace_id())
     return result

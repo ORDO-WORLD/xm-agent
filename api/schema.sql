@@ -400,3 +400,51 @@ CREATE TABLE IF NOT EXISTS xm.stock_log (
 CREATE INDEX IF NOT EXISTS stock_log_phone_idx ON xm.stock_log(company_id, phone, logged_at DESC);
 CREATE INDEX IF NOT EXISTS stock_log_time_idx ON xm.stock_log(company_id, logged_at DESC);
 
+
+-- AutoAudit sales accounts whose chats are pulled into a company automatically.
+CREATE TABLE IF NOT EXISTS xm.autoaudit_sources (
+ id uuid PRIMARY KEY,
+ company_id text NOT NULL DEFAULT current_setting('xm.workspace_id'),
+ sales_id integer NOT NULL,
+ sales_name text NOT NULL,
+ agent_name text NOT NULL,
+ status text NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting','pulling','current','failed')),
+ dataset_updated_at text,
+ check_requested_at timestamptz,
+ force_requested boolean NOT NULL DEFAULT false,
+ last_checked_at timestamptz,
+ last_error text,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ created_by uuid,
+ UNIQUE (company_id, sales_id)
+);
+CREATE INDEX IF NOT EXISTS autoaudit_sources_sales_idx ON xm.autoaudit_sources(sales_id);
+ALTER TABLE xm.imports ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'upload';
+-- The AutoAudit company a company may pull sales from; without it the company cannot connect.
+ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS autoaudit_company_id integer;
+ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS autoaudit_company_name text;
+
+-- Activity log: who did what, in plain sentences. Read by the platform administrator only,
+-- across companies, so company_id is written explicitly instead of defaulting to the session scope.
+CREATE TABLE IF NOT EXISTS xm.activity_log (
+ id bigserial PRIMARY KEY,
+ happened_at timestamptz NOT NULL DEFAULT now(),
+ last_at timestamptz NOT NULL DEFAULT now(),
+ layer text NOT NULL CHECK (layer IN ('change','account','export','view')),
+ action text NOT NULL,
+ actor_id uuid,
+ actor_name text NOT NULL,
+ actor_email text,
+ actor_role text,
+ company_id text,
+ company_name text,
+ as_admin boolean NOT NULL DEFAULT false,
+ failed boolean NOT NULL DEFAULT false,
+ summary text NOT NULL,
+ details jsonb NOT NULL DEFAULT '{}'::jsonb,
+ repeat_count integer NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS activity_log_recent_idx ON xm.activity_log(last_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS activity_log_company_idx ON xm.activity_log(company_id, last_at DESC);
+CREATE INDEX IF NOT EXISTS activity_log_actor_idx ON xm.activity_log(actor_email, last_at DESC);
+CREATE INDEX IF NOT EXISTS activity_log_merge_idx ON xm.activity_log(action, actor_email, last_at DESC);

@@ -8,6 +8,8 @@ Roles
 
 ROLE_RANK = {'user': 1, 'company_admin': 2, 'admin': 3}
 PUBLIC_PATHS = {'/health', '/auth/login'}
+# Inbound webhooks carry their own secret in the path; they have no session.
+PUBLIC_PREFIXES = ('/hooks/',)
 SESSION_PATHS = {'/auth/me', '/auth/logout'}
 SAFE_METHODS = {'GET', 'HEAD', 'OPTIONS'}
 
@@ -25,6 +27,14 @@ def normalize(path: str) -> str:
     return path.rstrip('/') or '/'
 
 
+# Reads that expose more than a member should see.
+ADMIN_READS = {'/autoaudit/options'}
+
+
+def is_public(path: str) -> bool:
+    return normalize(path) in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES)
+
+
 def required_role(method: str, path: str) -> str:
     """Lowest role that may call ``method path``."""
     path = normalize(path)
@@ -33,7 +43,7 @@ def required_role(method: str, path: str) -> str:
     if path == '/team' or path.startswith('/team/'):
         return 'company_admin'
     if method.upper() in SAFE_METHODS:
-        return 'user'
+        return 'company_admin' if path in ADMIN_READS else 'user'
     if (method.upper(), path) in MEMBER_WRITES:
         return 'user'
     return 'company_admin'

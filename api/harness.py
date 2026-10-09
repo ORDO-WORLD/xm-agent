@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-WORKSPACE_TABLES = ('match_events', 'stock_log', 'tracked_sales', 'group_matches', 'document_group_members', 'document_groups',
+WORKSPACE_TABLES = ('activity_log', 'autoaudit_sources', 'match_events', 'stock_log', 'tracked_sales', 'group_matches', 'document_group_members', 'document_groups',
                     'workspace_cache_state', 'matches', 'documents', 'entities', 'entity_counters', 'raw_messages', 'imports',
                     'maintenance_jobs', 'glossary', 'location_indexes', 'match_settings', 'app_preferences', 'audit_events')
 
@@ -89,7 +89,10 @@ class ServerTestCase(unittest.TestCase):
             self.assertEqual(response.status, status, (path, data[:600]))
             if response.headers.get('Content-Type', '').startswith(('application/pdf', 'application/vnd.openxmlformats')):
                 return data
-            return json.loads(data) if data else None
+            try:
+                return json.loads(data) if data else None
+            except ValueError:
+                return data   # an unhandled server error answers in plain text
 
     # -- fixtures -----------------------------------------------------------
     def setUp(self):
@@ -118,6 +121,8 @@ class ServerTestCase(unittest.TestCase):
                 for table in WORKSPACE_TABLES:
                     conn.execute(f'DELETE FROM xm.{table} WHERE company_id=%s', (scope,))
                 conn.execute('DELETE FROM xm.users WHERE workspace_id=%s', (scope,))
+            # Log lines of the test administrator and of attempts that belong to no company.
+            conn.execute("DELETE FROM xm.activity_log WHERE actor_email=%s OR actor_email LIKE 'isol-%%'", (self.ADMIN_EMAIL,))
             conn.commit()
 
     def upload(self, owner, texts=None, agent='Private Agent', day=1, messages=None):

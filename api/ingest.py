@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import activity
 from db import connect
 from tenant import workspace_id, workspace_scope
 from embedding import embed
@@ -141,6 +142,13 @@ def _process_import(import_id: str) -> None:
         match_count = recompute_matches(source='import', import_id=import_id, agent_name=job['agent_name'])
         with connect() as conn:
             conn.execute("UPDATE xm.imports SET status='completed', finished_at=now() WHERE id=%s", (import_id,))
+            activity.record(conn, 'change', 'import.done',
+                            f"selesai memproses {activity.quote(job['file_name'])} ({job['agent_name']}): {activity.number(total)} pesan, "
+                            f"{activity.number(counters['property_listing'])} listing, {activity.number(counters['buyer_request'])} buyer, "
+                            f"{activity.number(match_count)} match",
+                            {'file': job['file_name'], 'sumber': job['agent_name'], 'asal': job.get('source') or 'upload', 'pesan': total,
+                             'listing': counters['property_listing'], 'buyer': counters['buyer_request'],
+                             'diabaikan': counters['ignored'], 'duplikat': counters['duplicate'], 'match': match_count})
             conn.execute(
                 "INSERT INTO xm.audit_events(event_type, entity_type, entity_id, details) VALUES ('import_completed','import',%s,%s::jsonb)",
                 (import_id, json.dumps({**counters, "qdrant_points": qdrant_count, "matches": match_count})),
@@ -149,5 +157,9 @@ def _process_import(import_id: str) -> None:
     except Exception as exc:
         with connect() as conn:
             conn.execute("UPDATE xm.imports SET status='failed', error=%s, finished_at=now() WHERE id=%s", (str(exc), import_id))
+            name = conn.execute('SELECT file_name, agent_name FROM xm.imports WHERE id=%s', (import_id,)).fetchone()
+            if name:
+                activity.record(conn, 'change', 'import.failed', f"gagal memproses {activity.quote(name['file_name'])} ({name['agent_name']}): {str(exc)[:160]}",
+                                {'file': name['file_name'], 'sumber': name['agent_name'], 'alasan': str(exc)[:500]}, failed=True)
             conn.commit()
         raise

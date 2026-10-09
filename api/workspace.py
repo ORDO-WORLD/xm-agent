@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
+import activity
 from db import connect
 from parser import normalize_phone
 from reindex import glossary_values
@@ -41,10 +42,29 @@ class Settings(BaseModel):
 class Glossary(BaseModel):
     entries: dict[str, str]
 
+
+SETTING_LABELS = {
+    'land_tolerance_pct': 'toleransi luas tanah', 'building_tolerance_pct': 'toleransi luas bangunan', 'price_tolerance_pct': 'toleransi harga',
+    'location_weight_pct': 'bobot lokasi', 'land_weight_pct': 'bobot luas tanah', 'building_weight_pct': 'bobot luas bangunan',
+    'price_weight_pct': 'bobot harga', 'semantic_weight_pct': 'bobot kemiripan teks', 'data_quality_weight_pct': 'bobot kelengkapan data',
+}
+
+
+def _pct(value):
+    return f'{float(value):g}%'
+
+
+def _term_changes(before, after):
+    added = [item for item in after if item not in before]
+    removed = [item for item in before if item not in after]
+    parts = ([f'menambah {activity.listed(added)}'] if added else []) + ([f'menghapus {activity.listed(removed)}'] if removed else [])
+    return parts, {'ditambah': added, 'dihapus': removed}
+
 @router.put('/settings')
 def save_settings(payload: Settings):
     payload.validate_weights()
     with connect() as conn:
+        before = conn.execute("SELECT * FROM xm.match_settings WHERE company_id=current_setting('xm.workspace_id') FOR UPDATE").fetchone() or {}
         conn.execute(
             '''UPDATE xm.match_settings SET land_tolerance_pct=%s, building_tolerance_pct=%s,
                price_tolerance_pct=%s, location_weight_pct=%s, land_weight_pct=%s,
@@ -52,6 +72,14 @@ def save_settings(payload: Settings):
                data_quality_weight_pct=%s, updated_at=now() WHERE company_id=current_setting('xm.workspace_id') ''',
             tuple(payload.model_dump().values()),
         )
+        changed = {key: value for key, value in payload.model_dump().items()
+                   if before.get(key) is None or abs(float(before[key]) - float(value)) > 0.0001}
+        if changed:
+            activity.record(conn, 'change', 'match.settings', 'mengubah ' + ', '.join(
+                f"{SETTING_LABELS[key]} dari {_pct(before[key]) if before.get(key) is not None else '-'} ke {_pct(value)}"
+                for key, value in changed.items()), {
+                'sebelum': {SETTING_LABELS[key]: float(before[key]) if before.get(key) is not None else None for key in changed},
+                'sesudah': {SETTING_LABELS[key]: value for key, value in changed.items()}})
         conn.commit()
     return payload
 
@@ -123,6 +151,9 @@ def resolve_search(conn, request, search):
 @router.get('/search-default')
 def get_search_default(request: Request = None):
     user = current_user(request) if request is not None else None
+    if request is not None:
+        # The first thing the Pengaturan page loads.
+        activity.record_view('page.open', 'membuka Pengaturan')
     with connect() as conn:
         return search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
 
@@ -134,11 +165,18 @@ def save_search_default(payload: SearchDefault, request: Request = None):
         raise HTTPException(400, 'Default pencarian wajib diisi.')
     user = current_user(request) if request is not None else None
     with connect() as conn:
+        before = company_row(conn)
         if payload.locked is None:
             conn.execute("UPDATE xm.app_preferences SET search_terms=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')", (terms,))
         else:
             conn.execute("UPDATE xm.app_preferences SET search_terms=%s,search_locked=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')",
                          (terms, payload.locked))
+        parts, details = _term_changes(list(before['search_terms']), terms)
+        if payload.locked is not None and payload.locked != before['search_locked']:
+            parts.append('mengunci kata kunci' if payload.locked else 'membuka kunci kata kunci')
+            details['dikunci'] = payload.locked
+        if parts:
+            activity.record(conn, 'change', 'search.company', 'kata kunci company: ' + ', '.join(parts), details)
         conn.commit()
         return search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
 
@@ -160,10 +198,13 @@ def save_personal_search(payload: PersonalSearch, request: Request):
         if company_row(conn)['search_locked']:
             raise HTTPException(403, 'Kata kunci dikunci oleh super admin company.')
         key = owner_id() or user['id']
+        parts, details = _term_changes(personal_terms(conn, key) or [], terms)
         conn.execute(
             '''INSERT INTO xm.user_preferences(user_id, preferences) VALUES(%s,%s::jsonb)
                ON CONFLICT(user_id) DO UPDATE SET preferences=xm.user_preferences.preferences || excluded.preferences, updated_at=now()''',
             (key, json.dumps({'search_terms': terms})))
+        if parts:
+            activity.record(conn, 'change', 'search.personal', 'kata kunci pribadi: ' + ', '.join(parts), details)
         conn.commit()
         return search_state(conn, user['role'], key)
 
@@ -173,7 +214,10 @@ def reset_personal_search(request: Request):
     user = current_user(request)
     key = owner_id() or user['id']
     with connect() as conn:
+        had = personal_terms(conn, key)
         conn.execute("UPDATE xm.user_preferences SET preferences=preferences - 'search_terms', updated_at=now() WHERE user_id=%s", (key,))
+        if had:
+            activity.record(conn, 'change', 'search.personal', 'menghapus kata kunci pribadi dan kembali memakai kata kunci company', {'dihapus': had})
         conn.commit()
         return search_state(conn, user['role'], key)
 
@@ -184,9 +228,17 @@ def save_glossary(payload: Glossary):
     if len(entries) > 500 or any(not k or not v or len(k)>100 or len(v)>100 for k,v in entries.items()):
         raise HTTPException(400, 'Istilah dan nama baku wajib diisi (maks. 100 karakter, 500 istilah).')
     with connect() as conn:
+        before = glossary_values(conn)
         conn.execute("DELETE FROM xm.glossary WHERE company_id=current_setting('xm.workspace_id')")
         for k,v in entries.items():
             conn.execute('INSERT INTO xm.glossary(alias,canonical) VALUES(%s,%s)',(k,v))
+        added = {k: v for k, v in entries.items() if k not in before}
+        removed = {k: v for k, v in before.items() if k not in entries}
+        altered = {k: f'{before[k]} → {v}' for k, v in entries.items() if k in before and before[k] != v}
+        parts = [f'{verb} {len(group)} istilah' for verb, group in (('menambah', added), ('menghapus', removed), ('mengubah', altered)) if group]
+        if parts:
+            activity.record(conn, 'change', 'glossary.save', 'glosarium: ' + ', '.join(parts),
+                            {'ditambah': added, 'dihapus': removed, 'diubah': altered})
         conn.commit()
     return entries
 
@@ -197,6 +249,7 @@ def rebuild_index():
         current=conn.execute("SELECT * FROM xm.maintenance_jobs WHERE company_id=current_setting('xm.workspace_id') AND status IN ('queued','processing') LIMIT 1").fetchone()
         if current: return current
         row=conn.execute('INSERT INTO xm.maintenance_jobs(id) VALUES(%s) RETURNING *',(uuid.uuid4(),)).fetchone()
+        activity.record(conn, 'change', 'index.recompute', 'meminta proses ulang semua data dan hitung ulang match')
         conn.commit()
         return row
 
@@ -288,6 +341,8 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
         raise HTTPException(400, 'Pengelompokan hanya untuk listing property: sender atau phone.')
     with connect() as conn:
         search = resolve_search(conn, request, search)
+        if request is not None and offset == 0:
+            _log_list_view(conn, direction, search, phones, public_id, date_from, date_to, group_key)
         if workspace_cache.ready(conn):
             return workspace_cache.sources(conn,direction,search,phones,statuses,clause,date_params,offset,chosen,public_id,group_by or None,group_key)
     kind, relation = ('buyer_request','buyer_request_id') if direction=='buyer' else ('property_listing','property_listing_id')
@@ -369,12 +424,41 @@ def workspace_groups(group_by: str='', search: str='', phones: str='', statuses:
             return {'group_by': mode, 'groups': [], 'has_more': False}
         return workspace_cache.group_summary(conn,'property',search,phones,statuses,clause,date_params,chosen,public_id,mode,group_search,offset=offset)
 
+def _log_list_view(conn, direction, search, phones, public_id, date_from, date_to, group_key):
+    """One line for what a person asked the Cocokkan list to show."""
+    way = 'Buyer ke Properti' if direction == 'buyer' else 'Properti ke Buyer'
+    span = f', {date_from} s.d. {date_to}' if date_from and date_to else ''
+    terms = normalize_terms(search)
+    details = {'arah': way, 'kata_kunci': terms, 'nomor': phones or None, 'id': public_id or None,
+               'tanggal': [date_from, date_to] if span else None, 'kelompok': group_key}
+    if phones.strip():
+        activity.record_view('stock.listings', f"melihat listing sales {', '.join(phones.replace(';', ',').split(',')[:3]).strip()}", details)
+    elif public_id.strip():
+        activity.record_view('match.search', f'mencari ID {public_id.strip()[:40]} di Cocokkan ({way})', details)
+    elif group_key is not None:
+        activity.record_view('match.detail', f'membuka kelompok {activity.quote(group_key or "tanpa nama")} di Cocokkan ({way}{span})', details)
+    elif terms and set(terms) != set(company_row(conn)['search_terms']):
+        activity.record_view('match.search', f'mencari {activity.listed(terms)} di Cocokkan ({way}{span})', details)
+    else:
+        activity.record_view('page.open', f'membuka Cocokkan ({way}{span})', details)
+
+
 class Batch(BaseModel):
     direction: Literal['buyer','property']='buyer'
     ids: list[uuid.UUID] = Field(max_length=50)
     target_status: list[Literal['ready','on_hold','sold']] = ['ready']
 
 @router.post('/workspace/recommendations')
+def open_recommendations(payload: Batch):
+    result = recommendations(payload)
+    names = [group['source'].get('public_id') for group in result['groups'] if group['source'].get('public_id')]
+    kind = 'buyer' if payload.direction == 'buyer' else 'listing'
+    if result['groups']:
+        activity.record_view('match.detail', f'membuka rekomendasi untuk {names[0]}' if len(names) == 1 and len(result['groups']) == 1
+                             else f"membuka rekomendasi untuk {len(result['groups'])} {kind}", {'data': names})
+    return result
+
+
 def recommendations(payload: Batch):
     relation, other, kind = ('buyer_request_id','property_listing_id','buyer_request') if payload.direction=='buyer' else ('property_listing_id','buyer_request_id','property_listing')
     ids=list(dict.fromkeys(payload.ids))
@@ -436,4 +520,8 @@ def export_pdf(payload: Export):
         if p.target_id and target is None: raise HTTPException(409,'Hasil pencocokan berubah. Muat ulang lalu pilih kembali.')
         if not p.target_id and group['recommendations']: raise HTTPException(409,'Data sudah memiliki kecocokan. Muat ulang hasil.')
         selected.append((group['source'],target))
-    return Response(build_report(selected,payload.direction),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="XM-Matching-Report.pdf"'})
+    pdf=build_report(selected,payload.direction)
+    activity.record_now('export', 'export.pdf', f'mengunduh PDF {len(selected)} pasangan dari Cocokkan', {
+        'arah': 'Buyer ke Properti' if payload.direction == 'buyer' else 'Properti ke Buyer',
+        'data': list(dict.fromkeys(source.get('public_id') for source, _ in selected if source.get('public_id')))})
+    return Response(pdf,media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="XM-Matching-Report.pdf"'})

@@ -130,6 +130,34 @@ export type ImportRow = {
   new_warm: number;
 };
 
+export type AutoAuditSource = {
+  id: string;
+  sales_id: number;
+  sales_name: string;
+  agent_name: string;
+  status: 'waiting' | 'pulling' | 'current' | 'failed';
+  dataset_updated_at: string | null;
+  last_checked_at: string | null;
+  last_error: string | null;
+};
+
+export type AutoAuditSources = { configured: boolean; linked: boolean; autoaudit_company_name: string | null; sources: AutoAuditSource[] };
+
+export type AutoAuditOptions = { linked: boolean; sales: { id: number; name: string; company: string | null }[]; agent_names: string[] };
+
+export type AutoAuditCompany = { id: number; name: string };
+
+export type ActivityLayer = 'change' | 'account' | 'export' | 'view';
+export type ActivityRow = {
+  id: number; at: string; first_at: string; layer: ActivityLayer; action: string; action_label: string;
+  actor_name: string; actor_email: string | null; actor_role: string | null; company_id: string | null; company_name: string | null;
+  as_admin: boolean; failed: boolean; summary: string; details: Record<string, unknown>; repeat_count: number;
+};
+export type ActivityPage = { rows: ActivityRow[]; next: string | null };
+export type ActivityFilters = {
+  companies: { id: string; name: string }[]; actors: { email: string; name: string }[]; actions: { id: string; label: string }[];
+};
+
 export type StockTracked = {
   phone: string;
   label: string | null;
@@ -186,6 +214,8 @@ export type CompanySummary = {
   listings: number;
   search_locked: boolean;
   listing_group_by: GroupBy;
+  autoaudit_company_id: number | null;
+  autoaudit_company_name: string | null;
   users: { id: string; email: string; display_name: string; role: Role; is_locked: boolean; created_at: string }[];
 };
 

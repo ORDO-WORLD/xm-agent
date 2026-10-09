@@ -21,10 +21,12 @@ from parser import parse_message
 from qdrant import ensure_collection
 from qdrant import query as qdrant_query
 from qdrant import status as qdrant_status
-from access import PUBLIC_PATHS, SESSION_PATHS, required_role, role_allows
+from access import SESSION_PATHS, is_public, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
 from entities import migrate_v4
 from runtime_cache import cached_stats
+import activity
+from activity import actor_scope, quote, number
 
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
@@ -61,7 +63,7 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
-    if path not in PUBLIC_PATHS:
+    if not is_public(path):
         user = current_user(request)
         if not user:
             return JSONResponse({'detail': 'Sesi login diperlukan'}, status_code=401)
@@ -89,7 +91,9 @@ async def require_login(request: Request, call_next):
                     return JSONResponse({'detail': 'Akun tujuan tidak ditemukan'}, status_code=404)
         if not owner.get('workspace_id'):
             return JSONResponse({'detail': 'Workspace akun belum siap'}, status_code=503)
-        with workspace_scope(owner['workspace_id'], owner['id']):
+        # Inside another account's company the administrator is still the one acting.
+        as_admin = owner.get('workspace_id') != user.get('workspace_id')
+        with workspace_scope(owner['workspace_id'], owner['id']), actor_scope(user, as_admin):
             response = await call_next(request)
             response.headers['Cache-Control'] = 'private, no-store'
             response.headers['Vary'] = 'Cookie, X-XM-User-Id'
@@ -141,6 +145,8 @@ def load_stats():
 
 @app.get("/imports")
 def imports():
+    # The page refreshes itself while a file is processed, so repeats are not counted.
+    activity.record_view('page.open', 'membuka Unggah Data', bump=False)
     with connect() as conn:
         return conn.execute(
             """SELECT i.*, coalesce(m.total,0) new_matches, coalesce(m.hot,0) new_hot, coalesce(m.warm,0) new_warm
@@ -182,11 +188,17 @@ async def upload_import(file: UploadFile = File(...), agent_name: str | None = F
         ).fetchone()
         if existing:
             destination.unlink(missing_ok=True)
+            activity.record(conn, 'change', 'import.upload',
+                            f'mengunggah {quote(file.filename)} sebagai sumber {resolved_agent}, tetapi isinya sudah pernah diunggah (dilewati)',
+                            {'file': file.filename, 'sumber': resolved_agent, 'duplikat': True})
+            conn.commit()
             return {"id": existing["id"], "status": existing["status"], "duplicate": True}
         conn.execute(
             "INSERT INTO xm.imports(id, agent_name, file_name, file_path, file_sha256) VALUES (%s,%s,%s,%s,%s)",
             (import_id, resolved_agent, file.filename, str(destination), digest.hexdigest()),
         )
+        activity.record(conn, 'change', 'import.upload', f'mengunggah {quote(file.filename)} sebagai sumber {resolved_agent}',
+                        {'file': file.filename, 'sumber': resolved_agent})
         conn.commit()
     return {"id": import_id, "status": "queued", "duplicate": False, "agent_name": resolved_agent}
 
@@ -348,6 +360,7 @@ def batch_buyer_recommendations(payload: BuyerBatchRequest):
         row["temperature"] = "hot" if float(row["score"]) >= 80 else "warm"
         by_buyer[str(row["buyer_request_id"])].append(row)
     buyer_map = {str(row["id"]): row for row in buyers}
+    activity.record_view('match.detail', f'membuka rekomendasi untuk {len(buyer_map)} buyer')
     groups = [
         {"buyer": buyer_map[str(item)], "recommendations": by_buyer[str(item)]}
         for item in buyer_ids if str(item) in buyer_map
@@ -363,7 +376,9 @@ def get_settings():
 
 @app.post("/matches/recompute")
 def recompute():
-    return {"matches": recompute_matches()}
+    count = recompute_matches()
+    activity.record_now('change', 'match.recompute', f'menghitung ulang semua match: {number(count)} match', {'match': count})
+    return {"matches": count}
 
 
 @app.get("/agent/search")
@@ -447,3 +462,6 @@ from company import router as company_router
 app.include_router(company_router)
 from export_all import router as export_all_router
 app.include_router(export_all_router)
+from autoaudit_routes import router as autoaudit_router
+app.include_router(autoaudit_router)
+app.include_router(activity.router)
