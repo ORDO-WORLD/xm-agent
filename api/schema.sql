@@ -400,3 +400,33 @@ CREATE TABLE IF NOT EXISTS xm.stock_log (
 CREATE INDEX IF NOT EXISTS stock_log_phone_idx ON xm.stock_log(company_id, phone, logged_at DESC);
 CREATE INDEX IF NOT EXISTS stock_log_time_idx ON xm.stock_log(company_id, logged_at DESC);
 
+
+-- Backend-only workflow integration. Raw API keys are never stored.
+CREATE TABLE IF NOT EXISTS xm.integration_keys (
+ id uuid PRIMARY KEY,
+ company_id text NOT NULL,
+ created_by uuid NOT NULL REFERENCES xm.users(id) ON DELETE CASCADE,
+ name text NOT NULL,
+ token_hash text NOT NULL UNIQUE,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ last_used_at timestamptz,
+ revoked_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS integration_keys_company_idx ON xm.integration_keys(company_id);
+CREATE TABLE IF NOT EXISTS xm.export_jobs (
+ id uuid PRIMARY KEY,
+ company_id text NOT NULL,
+ request_id text NOT NULL,
+ payload jsonb NOT NULL,
+ status text NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','processing','completed','failed','cancelled','expired')),
+ progress jsonb NOT NULL DEFAULT '{}'::jsonb,
+ files jsonb NOT NULL DEFAULT '[]'::jsonb,
+ error text,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ started_at timestamptz,
+ finished_at timestamptz,
+ expires_at timestamptz,
+ UNIQUE(company_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS export_jobs_pending_idx ON xm.export_jobs(created_at) WHERE status IN ('queued','processing');
+CREATE INDEX IF NOT EXISTS export_jobs_company_idx ON xm.export_jobs(company_id, created_at DESC);

@@ -30,6 +30,8 @@ def required_role(method: str, path: str) -> str:
     path = normalize(path)
     if path == '/admin' or path.startswith('/admin/'):
         return 'admin'
+    if path == '/integration/keys' or path.startswith('/integration/keys/'):
+        return 'company_admin'
     if path == '/team' or path.startswith('/team/'):
         return 'company_admin'
     if method.upper() in SAFE_METHODS:

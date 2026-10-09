@@ -4,6 +4,7 @@ import time
 from db import connect, ensure_schema
 from tenant import workspace_scope
 from ingest import process_import
+from integration import process_next_export
 
 
 def claim_job():
@@ -62,6 +63,8 @@ if __name__ == "__main__":
                 process_import(job_id)
             except Exception as exc:
                 print(f"Import {job_id} failed: {exc}", flush=True)
+        elif process_next_export():
+            continue
         else:
             time.sleep(float(os.getenv("WORKER_POLL_SECONDS", "2")))
 

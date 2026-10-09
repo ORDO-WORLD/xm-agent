@@ -23,6 +23,7 @@ from qdrant import query as qdrant_query
 from qdrant import status as qdrant_status
 from access import PUBLIC_PATHS, SESSION_PATHS, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
+from integration import authenticate as integration_authenticate, is_export_path, router as integration_router
 from entities import migrate_v4
 from runtime_cache import cached_stats
 
@@ -61,6 +62,17 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
+    if is_export_path(path):
+        try:
+            key = integration_authenticate(request)
+        except HTTPException as exc:
+            return JSONResponse({'detail': exc.detail}, status_code=exc.status_code)
+        request.state.xm_integration_key = key
+        with workspace_scope(key['company_id']):
+            response = await call_next(request)
+            response.headers['Cache-Control'] = 'private, no-store'
+            response.headers['Vary'] = 'Authorization'
+            return response
     if path not in PUBLIC_PATHS:
         user = current_user(request)
         if not user:
@@ -98,6 +110,7 @@ async def require_login(request: Request, call_next):
 
 
 app.include_router(auth_router)
+app.include_router(integration_router)
 
 
 @app.get("/health")

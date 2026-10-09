@@ -39,7 +39,7 @@ function duration(seconds: number) {
   return minutes < 60 ? `± ${minutes} menit` : `± ${Math.floor(minutes / 60)} jam ${minutes % 60} menit`;
 }
 
-/** Export every match of the current filters into one PDF: confirm first, then real progress per sales. */
+/** Confirm output format, then export with real progress per sales. */
 export function ExportAllModal({ state, direction, filters }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, string> }) {
   const [locked, setLocked] = useState(false);
   return (
@@ -54,6 +54,7 @@ export function ExportAllModal({ state, direction, filters }: { state: ReturnTyp
 function Body({ direction, filters, onLock, onClose }: { direction: Direction; filters: Record<string, string>; onLock: (locked: boolean) => void; onClose: () => void }) {
   const api = useApi();
   const plan = useData((signal) => api.post<Plan>('/export/all/plan', filters, signal), []);
+  const [output, setOutput] = useState<'single' | 'grouped'>('grouped');
   const [stage, setStage] = useState<Stage>('confirm');
   const [current, setCurrent] = useState(0);
   const [pages, setPages] = useState(0);
@@ -78,15 +79,15 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
   const data = plan.data;
   const byPhone = data?.group_by === 'phone';
   const unit = byPhone ? 'nomor' : 'pengirim';
-  const fileName = `Semua-Pencocokan-${todayWib()}.pdf`;
+  const fileName = `Semua-Pencocokan-${todayWib()}.${output === 'grouped' ? 'zip' : 'pdf'}`;
   const totalPages = data ? data.totals.pages + data.groups.length : 0;
-  const tooBig = !!data && totalPages > data.max_pages;
+  const tooBig = !!data && (output === 'single' ? totalPages > data.max_pages : data.groups.some((group) => group.pages + 1 > data.max_pages));
   const fraction = stage === 'done' || stage === 'merging' ? 1 : totalPages ? Math.min(pages / totalPages, 1) : 0;
   const estimate = data ? totalPages / PAGES_PER_SECOND + data.groups.length * 0.3 + 5 : 0;
   // After a few seconds of real work, the remaining time follows the measured speed.
   const remaining = elapsed > 4 && fraction > 0.02 ? (elapsed / fraction) * (1 - fraction) : Math.max(estimate - elapsed, 0);
   const lines = phrases(source, target);
-  const phrase = stage === 'merging' ? 'Menggabungkan semua bagian menjadi satu PDF…' : lines[Math.floor(elapsed / PHRASE_SECONDS) % lines.length];
+  const phrase = stage === 'merging' ? (output === 'grouped' ? 'Menyiapkan PDF terpisah dalam ZIP…' : 'Menggabungkan semua bagian menjadi satu PDF…') : lines[Math.floor(elapsed / PHRASE_SECONDS) % lines.length];
 
   function save(url: string) {
     const link = document.createElement('a');
@@ -113,12 +114,12 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
       }
       if (cancelled.current) return;
       setStage('merging');
-      const blob = await api.file(`/export/all/${data.token}/download`);
+      const blob = await api.file(`/export/all/${data.token}/download?output=${output}`);
       if (cancelled.current) return;
       const url = URL.createObjectURL(blob);
       setFile(url); save(url);
       setStage('done');
-      toast.success('PDF semua pencocokan siap diunduh');
+      toast.success(output === 'grouped' ? 'PDF per kelompok siap diunduh dalam ZIP' : 'PDF semua pencocokan siap diunduh');
     } catch (reason) {
       if (cancelled.current) return;
       setProblem(errorMessage(reason, 'Export belum dapat diselesaikan.'));
@@ -153,14 +154,27 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
 
         {data && data.groups.length > 0 && (stage === 'confirm' || stage === 'failed') && (
           <>
-            <p className="text-base leading-relaxed">Mulai export semua pencocokan sesuai filter yang sedang aktif. Hasilnya satu file PDF, dikelompokkan per <strong>{byPhone ? 'nomor telepon' : 'pengirim'}</strong>.</p>
+            <p className="text-base leading-relaxed">Mulai export semua pencocokan sesuai filter yang sedang aktif. Hasil dikelompokkan per <strong>{byPhone ? 'nomor telepon' : 'pengirim'}</strong>.</p>
+            <fieldset className="space-y-2">
+              <legend className="mb-2 font-semibold">Pilihan hasil export</legend>
+              {([
+                ['single', 'Jadikan satu file PDF'],
+                ['grouped', `Pisahkan PDF per ${byPhone ? 'nama kontak / nomor telepon' : 'pengirim'}`],
+              ] as const).map(([value, label]) => (
+                <label key={value} className="flex cursor-pointer items-center gap-3 rounded-xl border border-border p-3">
+                  <input type="radio" name="export-output" value={value} checked={output === value} onChange={() => setOutput(value)} />
+                  <span>{label}</span>
+                </label>
+              ))}
+              {output === 'grouped' && <p className="text-sm text-muted">Satu ZIP berisi PDF terpisah. Nama file mencantumkan nama, nomor telepon, jumlah listing/buyer, dan rentang halaman berurutan.</p>}
+            </fieldset>
             <dl className="grid grid-cols-2 gap-2 text-center sm:grid-cols-3">
               {stats.map(([label, value, tone]) => (
                 <div key={label} className={`rounded-2xl px-2 py-3 ${tone}`}><dd className="text-2xl font-bold leading-none tracking-tight">{number(value)}</dd><dt className="mt-1.5 text-sm font-semibold">{label}</dt></div>
               ))}
             </dl>
-            <p className="rounded-2xl border border-border bg-background p-3 text-base">Total <strong>{number(totalPages)} halaman</strong> · perkiraan waktu <strong>{duration(estimate)}</strong>.{!tooBig && totalPages > 3000 ? ' File ini besar. Persempit tanggal atau filter kalau ingin lebih cepat.' : ''}</p>
-            {tooBig && <ErrorNotice message={`Terlalu besar untuk satu PDF (batas ${number(data.max_pages)} halaman). Persempit tanggal posting, pilih Hot saja, atau isi nomor sales, lalu coba lagi.`} />}
+            <p className="rounded-2xl border border-border bg-background p-3 text-base">Total <strong>{number(totalPages)} halaman</strong> · perkiraan waktu <strong>{duration(estimate)}</strong>.{output === 'single' && !tooBig && totalPages > 3000 ? ' File ini besar. Persempit tanggal atau filter kalau ingin lebih cepat.' : ''}</p>
+            {tooBig && <ErrorNotice message={`${output === 'grouped' ? 'Salah satu kelompok terlalu besar' : 'Terlalu besar untuk satu PDF'} (batas ${number(data.max_pages)} halaman). Persempit tanggal posting, pilih Hot saja, atau isi nomor sales, lalu coba lagi.`} />}
             {stage === 'failed' && <ErrorNotice message={problem} />}
           </>
         )}

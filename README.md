@@ -43,6 +43,8 @@ Panduan lengkap, tabel peran, dan langkah upgrade: [docs/UPGRADE_V4.0.md](docs/U
 - Advertising phrases with concrete stock details no longer override listing intent. Contact signatures are extracted separately and excluded from structured locations, searchable matching text, and embeddings.
 - Hot/Warm scores always include visible text: 🔥 Hot and 🌡️ Warm. Hot cards have a red border and soft pulsing glow, respecting reduced-motion preferences. PDF badges use rounded red/orange backgrounds; WhatsApp links prefill an Indonesian follow-up message.
 - Select individual result pairs (or unmatched sources) to download an A4 portrait PDF (one selected pair per page, 11 pt body text that shrinks only when needed), with the same website logo, Jakarta generation date, and a clickable WhatsApp button only for the recommendation on the right. Maximum 200 report pairs from 50 sources per export.
+- Export semua PDF offers one combined PDF or a ZIP containing one PDF per sender/phone group (default). Separate filenames include the sender/contact name, representative phone, source count, and continuous page range, e.g. `01_Ivan-Prayogo_6282226811158_60listing_hal1-574.pdf`. Grouping follows the company’s selected sender/phone setting.
+- Backend workflow integration: company-scoped API keys, durable export jobs, per-contact PDF manifests, and authenticated file downloads. See [docs/WORKFLOW_INTEGRATION.md](docs/WORKFLOW_INTEGRATION.md).
 - Regression checks: `python3 -m unittest discover -s api -p 'test_*.py'`.
 - Existing local services remain at http://127.0.0.1:9004. The Python/PostgreSQL/Qdrant stack is hosted through Docker Compose; the starter `.openai/hosting.json` has no registered cloud Site.
 

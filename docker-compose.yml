@@ -43,6 +43,9 @@ services:
       QDRANT_URL: http://qdrant-rag:6333
       QDRANT_COLLECTION: xm_rag
       UPLOAD_DIR: /data/uploads
+      XM_EXPORT_DIR: /data/export-parts
+      XM_INTEGRATION_EXPORT_DIR: /data/integration-exports
+      XM_INTEGRATION_EXPORT_DAYS: ${XM_INTEGRATION_EXPORT_DAYS:-7}
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,6 +73,9 @@ services:
       QDRANT_URL: http://qdrant-rag:6333
       QDRANT_COLLECTION: xm_rag
       UPLOAD_DIR: /data/uploads
+      XM_EXPORT_DIR: /data/export-parts
+      XM_INTEGRATION_EXPORT_DIR: /data/integration-exports
+      XM_INTEGRATION_EXPORT_DAYS: ${XM_INTEGRATION_EXPORT_DAYS:-7}
     depends_on:
       postgres:
         condition: service_healthy
