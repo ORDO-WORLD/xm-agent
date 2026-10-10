@@ -6,7 +6,7 @@ import { CircleCheck, Download, FileText, Sparkles } from 'lucide-react';
 import { EmptyState, ErrorNotice, LoadingRows } from '@/components/app/primitives';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { errorMessage } from '@/lib/api';
-import { number, todayWib } from '@/lib/format';
+import { number, prettyRange, todayWib } from '@/lib/format';
 import type { Direction, GroupBy } from '@/lib/types';
 import { useData } from '@/lib/use-data';
 import { useApi } from '@/lib/workspace-context';
@@ -40,7 +40,7 @@ function duration(seconds: number) {
 }
 
 /** Confirm output format, then export with real progress per sales. */
-export function ExportAllModal({ state, direction, filters }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, string> }) {
+export function ExportAllModal({ state, direction, filters }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, unknown> }) {
   const [locked, setLocked] = useState(false);
   return (
     <Modal.Backdrop isOpen={state.isOpen} isDismissable={!locked} isKeyboardDismissDisabled={locked} onOpenChange={(open) => { if (open || !locked) state.setOpen(open); }}>
@@ -51,7 +51,7 @@ export function ExportAllModal({ state, direction, filters }: { state: ReturnTyp
   );
 }
 
-function Body({ direction, filters, onLock, onClose }: { direction: Direction; filters: Record<string, string>; onLock: (locked: boolean) => void; onClose: () => void }) {
+function Body({ direction, filters, onLock, onClose }: { direction: Direction; filters: Record<string, unknown>; onLock: (locked: boolean) => void; onClose: () => void }) {
   const api = useApi();
   const plan = useData((signal) => api.post<Plan>('/export/all/plan', filters, signal), []);
   const [output, setOutput] = useState<'single' | 'grouped'>('grouped');
@@ -79,7 +79,7 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
   const data = plan.data;
   const byPhone = data?.group_by === 'phone';
   const unit = byPhone ? 'nomor' : 'pengirim';
-  const fileName = `Semua-Pencocokan-${todayWib()}.${output === 'grouped' ? 'zip' : 'pdf'}`;
+  const fileName = `${filters.recent ? 'Match-Terbaru' : 'Semua-Pencocokan'}-${todayWib()}.${output === 'grouped' ? 'zip' : 'pdf'}`;
   const totalPages = data ? data.totals.pages + data.groups.length : 0;
   const tooBig = !!data && (output === 'single' ? totalPages > data.max_pages : data.groups.some((group) => group.pages + 1 > data.max_pages));
   const fraction = stage === 'done' || stage === 'merging' ? 1 : totalPages ? Math.min(pages / totalPages, 1) : 0;
@@ -146,7 +146,7 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
   return (
     <>
       {!working && <Modal.CloseTrigger />}
-      <Modal.Header><Modal.Heading>{stage === 'done' ? 'Export selesai' : working ? 'Sedang membuat PDF…' : 'Export semua pencocokan ke PDF'}</Modal.Heading></Modal.Header>
+      <Modal.Header><Modal.Heading>{stage === 'done' ? 'Export selesai' : working ? 'Sedang membuat PDF…' : filters.recent ? 'Export Match Terbaru ke PDF' : 'Export semua pencocokan ke PDF'}</Modal.Heading></Modal.Header>
       <Modal.Body className="space-y-4">
         <ErrorNotice message={plan.error} onRetry={plan.reload} />
         {plan.loading && !data && <LoadingRows rows={3} />}
@@ -154,7 +154,7 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
 
         {data && data.groups.length > 0 && (stage === 'confirm' || stage === 'failed') && (
           <>
-            <p className="text-base leading-relaxed">Mulai export semua pencocokan sesuai filter yang sedang aktif. Hasil dikelompokkan per <strong>{byPhone ? 'nomor telepon' : 'pengirim'}</strong>.</p>
+            <p className="text-base leading-relaxed">{filters.recent ? `Export pasangan yang ditemukan pada ${prettyRange(typeof filters.found_from === 'string' ? filters.found_from : '', typeof filters.found_to === 'string' ? filters.found_to : '')}, sesuai filter dan pilihan Anda.` : 'Mulai export semua pencocokan sesuai filter yang sedang aktif.'} Hasil dikelompokkan per <strong>{byPhone ? 'nomor telepon' : 'pengirim'}</strong>.</p>
             <fieldset className="space-y-2">
               <legend className="mb-2 font-semibold">Pilihan hasil export</legend>
               {([

@@ -101,6 +101,8 @@ export type RecentGroup = {
   source: Row;
   latest_found_at: string;
   pair_count: number;
+  hot_count: number;
+  warm_count: number;
   matches: RecentMatch[];
 };
 

@@ -1,6 +1,8 @@
 """Upload modes enforce company keywords and the company's sales watchlist."""
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from harness import ServerTestCase
 from matching_scope import MatchingScope
@@ -16,6 +18,7 @@ class ScopeRulesTests(unittest.TestCase):
         scope = MatchingScope('company', ('konig',))
         self.assertTrue(scope.includes({'raw_text': KONIG, 'normalized_text': 'dijual rumah'}))
         self.assertFalse(scope.includes({'raw_text': OTHER, 'agent_name': 'konig', 'author': 'konig'}))
+        self.assertFalse(scope.includes({'raw_text': OTHER, 'contact_name': 'konig'}))
 
     def test_company_substrings_or_phrases_and_literal_wildcards(self):
         scope = MatchingScope('company', ('konig', 'property citraland', '100%_sale'))
@@ -136,6 +139,107 @@ class UploadScopeTests(ServerTestCase):
         with patch('reindex.upsert', lambda points: len(points)), patch('reindex._request', lambda *a, **kw: None), patch('matcher.qdrant_query', lambda *a, **kw: []):
             self.assertTrue(process_maintenance())
         self.assertEqual(self.recent()['totals']['pairs'], 1)
+
+    def test_yesterday_history_uses_current_company_rules_without_recompute(self):
+        # Reproduce the production report: an external buyer matched unrelated
+        # listings before keyword enforcement was deployed.
+        first = self.upload(self.owner, texts=[BUYER, KONIG, OTHER], agent='Konig uploader')
+        self.process(first)
+        self.assertEqual(self.recent()['totals']['pairs'], 2)
+        yesterday = datetime.now(ZoneInfo('Asia/Jakarta')) - timedelta(days=1)
+        from db import connect
+        with connect() as conn:
+            conn.execute('UPDATE xm.match_events SET found_at=%s WHERE company_id=%s',
+                         (yesterday, self.company['company_id']))
+            conn.commit()
+        self.call(self.boss, '/search-default', 'PUT', {'terms': ['konig'], 'locked': True})
+        day = yesterday.date().isoformat()
+        for direction in ('buyer', 'property'):
+            result = self.call(self.staff, f'/matches/recent?date_from={day}&date_to={day}&direction={direction}')
+            self.assertEqual(result['totals']['pairs'], 1)
+            listing = result['groups'][0]['matches'][0]['target'] if direction == 'buyer' else result['groups'][0]['source']
+            self.assertEqual(listing['raw_text'], KONIG)
+        days = self.call(self.staff, f'/matches/recent/days?date_from={day}&date_to={day}')
+        self.assertEqual(days['days'][day]['total'], 1)
+        self.assertEqual(days['latest_date'], day)
+        summary = self.call(self.staff, '/matches/recent/summary')
+        self.assertEqual((summary['unseen'], summary['last_import']['total']), (1, 1))
+        overview = self.call(self.staff, f'/dashboard/overview?period=custom&date_from={day}&date_to={day}')
+        self.assertEqual(overview['kpi']['matches'], 1)
+        # Reading never deletes/re-dates history. Removing the keyword restores
+        # the two historical pairs; an unrelated uploader cannot grant ownership.
+        self.call(self.boss, '/search-default', 'PUT', {'terms': ['absent'], 'locked': True})
+        self.assertEqual(self.recent()['totals']['pairs'], 0)
+        self.call(self.boss, '/search-default', 'PUT', {'terms': [], 'clear': True, 'locked': True})
+        self.assertEqual(self.recent()['totals']['pairs'], 2)
+
+    def test_history_uses_current_sales_watchlist_and_hides_empty_watchlist(self):
+        first = self.upload(self.owner, texts=[BUYER, KONIG, OTHER + ', 081234567892'])
+        self.process(first)
+        self.assertEqual(self.recent()['totals']['pairs'], 2)
+        self.call(self.boss, '/stock/tracked', 'PUT', {'phones': ['081234567892']})
+        self.call(self.boss, '/company/settings', 'PUT', {'matching_mode': 'sales'})
+        self.call(self.boss, '/search-default', 'PUT', {'terms': ['konig'], 'locked': True})
+        result = self.recent()
+        self.assertEqual(result['totals']['pairs'], 1)
+        self.assertIn('Sari', result['groups'][0]['matches'][0]['target']['raw_text'])
+        self.call(self.boss, '/stock/tracked', 'PUT', {'phones': []})
+        self.assertEqual(self.recent()['totals']['pairs'], 0)
+        summary = self.call(self.staff, '/matches/recent/summary')
+        self.assertEqual((summary['unseen'], summary['last_import']), (0, None))
+
+    def test_gallery_lazy_details_page_and_company_isolation(self):
+        self.process(self.upload(self.owner, texts=[BUYER, KONIG, OTHER]))
+        url = '/matches/recent?date_from=2026-01-01&date_to=2026-12-31'
+        gallery = self.call(self.staff, url + '&per_source=0')
+        source = gallery['groups'][0]
+        self.assertEqual(source['matches'], [])
+        self.assertEqual(source['pair_count'], 2)
+        self.assertEqual(source['hot_count'] + source['warm_count'], 2)
+        detail_url = url + '&source_entity=' + source['source']['entity_id']
+        first = self.call(self.staff, detail_url + '&per_source=1')['groups'][0]['matches']
+        second = self.call(self.staff, detail_url + '&per_source=1&match_offset=1')['groups'][0]['matches']
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertNotEqual(first[0]['event_id'], second[0]['event_id'])
+        _, _, other = self.make_company('PrivateGallery')
+        self.assertEqual(self.call(other, detail_url)['groups'], [])
+
+    def test_recent_export_uses_discovery_dates_current_rules_and_selections(self):
+        from db import connect
+        from io import BytesIO
+        from pypdf import PdfReader
+        self.process(self.upload(self.owner, texts=[BUYER, KONIG, OTHER], agent='Konig uploader'))
+        yesterday = datetime.now(ZoneInfo('Asia/Jakarta')) - timedelta(days=1)
+        with connect() as conn:
+            conn.execute('UPDATE xm.match_events SET found_at=%s WHERE company_id=%s', (yesterday, self.company['company_id']))
+            conn.commit()
+        self.call(self.boss, '/search-default', 'PUT', {'terms': ['konig'], 'locked': True})
+        day = yesterday.date().isoformat()
+        group = self.call(self.staff, f'/matches/recent?date_from={day}&date_to={day}')['groups'][0]
+        filters = {'recent': True, 'found_from': day, 'found_to': day, 'direction': 'buyer'}
+        for direction in ('buyer', 'property'):
+            filters['direction'] = direction
+            plan = self.call(self.staff, '/export/all/plan', 'POST', filters)
+            self.assertEqual(plan['totals']['hot'] + plan['totals']['warm'], 1)
+            part = self.call(self.staff, '/export/all/part', 'POST', {**filters, 'token': plan['token'], 'index': 0, 'group_key': plan['groups'][0]['key']})
+            self.assertEqual(part['pages'], 2)
+            self.assertEqual(len(part['entity_pairs']), 1)
+            pdf = self.call(self.staff, f"/export/all/{plan['token']}/download")
+            pages = PdfReader(BytesIO(pdf)).pages
+            self.assertEqual(len(pages), 2)
+            text = '\n'.join(page.extract_text() for page in pages)
+            self.assertIn('KONIG', text)
+            self.assertNotIn('Sari', text)
+        filters['direction'] = 'buyer'
+        for pick in ({'recent_sources': [group['source']['entity_id']]}, {'recent_events': [group['matches'][0]['event_id']]}):
+            plan = self.call(self.staff, '/export/all/plan', 'POST', {**filters, **pick})
+            self.assertEqual(plan['totals']['pages'], 1)
+        for pick in ({'recent_sources': []}, {'recent_events': []}):
+            self.assertEqual(self.call(self.staff, '/export/all/plan', 'POST', {**filters, **pick})['groups'], [])
+        self.call(self.staff, '/export/all/plan', 'POST', {**filters, 'found_from': 'bad'}, status=400)
+        self.call(self.boss, '/search-default', 'PUT', {'terms': ['absent'], 'locked': True})
+        self.assertEqual(self.call(self.staff, '/export/all/plan', 'POST', filters)['groups'], [])
 
 
 if __name__ == '__main__':

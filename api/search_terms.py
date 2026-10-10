@@ -11,9 +11,12 @@ def normalize_terms(value):
     return terms
 
 
-def search_filter(value):
+def search_filter(value, *, include_contact=True):
     terms = normalize_terms(value)
     if not terms:
         return '', []
     patterns = ['%' + term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%' for term in terms]
-    return " AND (r.raw_text ILIKE ANY(%s) OR d.normalized_text ILIKE ANY(%s) OR coalesce(d.contact_name,'') ILIKE ANY(%s))", [patterns, patterns, patterns]
+    fields = ['r.raw_text', 'd.normalized_text']
+    if include_contact:
+        fields.append("coalesce(d.contact_name,'')")
+    return ' AND (' + ' OR '.join(field + ' ILIKE ANY(%s)' for field in fields) + ')', [patterns] * len(fields)

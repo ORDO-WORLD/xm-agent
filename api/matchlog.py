@@ -8,12 +8,14 @@ import json
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
 from auth import current_user
 from db import connect
 from tenant import owner_id
+from matching_scope import history_scope_filter
 
 router = APIRouter(prefix='/matches/recent')
 WIB = ZoneInfo('Asia/Jakarta')
@@ -80,7 +82,7 @@ def _filters(include_inactive: bool):
 @router.get('')
 def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from: str = '', date_to: str = '',
                    temps: str = 'hot,warm', include_inactive: bool = False, limit: int = 30, offset: int = 0,
-                   per_source: int = 20):
+                   per_source: int = 20, source_entity: UUID | None = None, match_offset: int = 0):
     """New matches grouped by the buyer (``buyer``) or the listing (``property``) they belong to."""
     today = datetime.now(WIB).date().isoformat()
     start, end = wib_bounds(date_from or today, date_to or date_from or today)
@@ -88,7 +90,7 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
     source_col, target_col = ('buyer_entity', 'listing_entity') if direction == 'buyer' else ('listing_entity', 'buyer_entity')
     allowed = _filters(include_inactive)
     limit = min(max(limit, 1), 100)
-    per_source = min(max(per_source, 1), 50)
+    per_source = min(max(per_source, 0), 50)
     base = f'''FROM xm.match_events me
        JOIN xm.entities se ON se.entity_id = me.{source_col} JOIN xm.entities te ON te.entity_id = me.{target_col}
        WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active
@@ -102,11 +104,19 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
     elif not wanted:
         temp_sql = ' AND false'
     with connect() as conn:
+        scope_sql, scope_params = history_scope_filter(conn)
+        base += scope_sql
+        base_params += scope_params
+        if source_entity:
+            base += f' AND me.{source_col}=%s'
+            base_params.append(source_entity)
         totals = conn.execute(
             'SELECT count(*) AS pairs, count(*) FILTER (WHERE me.last_score >= 80) AS hot, '
             'count(*) FILTER (WHERE me.last_score < 80) AS warm ' + base, base_params).fetchone()
         page = conn.execute(
-            f'SELECT me.{source_col} AS entity_id, max(me.found_at) AS latest, count(*) AS pairs ' + base + temp_sql +
+            f'''SELECT me.{source_col} AS entity_id, max(me.found_at) AS latest, count(*) AS pairs,
+               count(*) FILTER (WHERE me.last_score>=80) AS hot_count,
+               count(*) FILTER (WHERE me.last_score<80) AS warm_count ''' + base + temp_sql +
             f' GROUP BY me.{source_col} ORDER BY max(me.found_at) DESC, me.{source_col} LIMIT %s OFFSET %s',
             base_params + [limit + 1, max(0, offset)]).fetchall()
         has_more = len(page) > limit
@@ -115,12 +125,15 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
         events = conn.execute(
             f'''SELECT me.id AS event_id, me.{source_col} AS source_entity, me.{target_col} AS target_entity, me.found_at, me.hot_at,
                        me.import_id, me.agent_name, me.first_score, me.last_score ''' + base + temp_sql +
-            f' AND me.{source_col} = ANY(%s::uuid[]) ORDER BY me.last_score DESC, me.found_at DESC',
-            base_params + [source_ids]).fetchall() if source_ids else []
+            f' AND me.{source_col} = ANY(%s::uuid[]) ORDER BY me.last_score DESC, me.found_at DESC, me.id',
+            base_params + [source_ids]).fetchall() if source_ids and per_source else []
         by_source = {}
+        seen = {}
         for event in events:
-            bucket = by_source.setdefault(str(event['source_entity']), [])
-            if len(bucket) < per_source:
+            key = str(event['source_entity'])
+            seen[key] = seen.get(key, 0) + 1
+            bucket = by_source.setdefault(key, [])
+            if seen[key] > max(0, match_offset) and len(bucket) < per_source:
                 bucket.append(event)
         entity_ids = list(source_ids) + [str(event['target_entity']) for bucket in by_source.values() for event in bucket]
         people = {}
@@ -147,7 +160,8 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
                             'agent_name': event['agent_name'],
                             'upgraded_to_hot': bool(event['hot_at'] and float(event['first_score']) < 80 and score >= 80),
                             'target': target})
-        groups.append({'source': people[key], 'latest_found_at': row['latest'], 'pair_count': row['pairs'], 'matches': matches})
+        groups.append({'source': people[key], 'latest_found_at': row['latest'], 'pair_count': row['pairs'],
+                       'hot_count': row['hot_count'], 'warm_count': row['warm_count'], 'matches': matches})
     return {'direction': direction, 'date_from': start.date().isoformat(), 'date_to': (end - timedelta(days=1)).date().isoformat(),
             'totals': totals, 'groups': groups, 'has_more': has_more}
 
@@ -158,6 +172,7 @@ def recent_days(date_from: str, date_to: str, include_inactive: bool = False):
     start, end = wib_bounds(date_from, date_to)
     allowed = _filters(include_inactive)
     with connect() as conn:
+        scope_sql, scope_params = history_scope_filter(conn)
         rows = conn.execute(
             '''SELECT (me.found_at AT TIME ZONE 'Asia/Jakarta')::date AS day, count(*) AS total,
                       count(*) FILTER (WHERE me.last_score >= 80) AS hot, count(*) FILTER (WHERE me.last_score < 80) AS warm
@@ -165,10 +180,11 @@ def recent_days(date_from: str, date_to: str, include_inactive: bool = False):
                JOIN xm.entities te ON te.entity_id = me.listing_entity
                WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active
                  AND me.found_at >= %s AND me.found_at < %s AND se.status = ANY(%s) AND te.status = ANY(%s)
-               GROUP BY 1 ORDER BY 1''', (start, end, allowed, allowed)).fetchall()
+               ''' + scope_sql + ' GROUP BY 1 ORDER BY 1', [start, end, allowed, allowed, *scope_params]).fetchall()
         latest = conn.execute(
-            '''SELECT max(found_at AT TIME ZONE 'Asia/Jakarta')::date AS day FROM xm.match_events
-               WHERE company_id = current_setting('xm.workspace_id') AND source = 'import' AND active''').fetchone()
+            '''SELECT max(me.found_at AT TIME ZONE 'Asia/Jakarta')::date AS day FROM xm.match_events me
+               WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active''' +
+            scope_sql, scope_params).fetchone()
     return {'days': {str(row['day']): {'total': row['total'], 'hot': row['hot'], 'warm': row['warm']} for row in rows},
             'latest_date': str(latest['day']) if latest and latest['day'] else None}
 
@@ -188,20 +204,23 @@ def recent_summary(request: Request):
     user = current_user(request)
     user_key = owner_id() or user['id']
     with connect() as conn:
+        scope_sql, scope_params = history_scope_filter(conn)
         since = _seen_at(conn, user_key) or (datetime.now(WIB) - timedelta(days=7))
         unseen = conn.execute(
             '''SELECT count(*) AS total, count(*) FILTER (WHERE me.last_score >= 80) AS hot
                FROM xm.match_events me JOIN xm.entities se ON se.entity_id = me.buyer_entity
                JOIN xm.entities te ON te.entity_id = me.listing_entity
                WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active
-                 AND me.found_at > %s AND se.status = 'ready' AND te.status = 'ready' ''', (since,)).fetchone()
+                 AND me.found_at > %s AND se.status = 'ready' AND te.status = 'ready' ''' + scope_sql,
+            [since, *scope_params]).fetchone()
         last = conn.execute(
             '''SELECT me.import_id, max(me.found_at) AS found_at, count(*) AS total,
                       count(*) FILTER (WHERE me.last_score >= 80) AS hot, count(*) FILTER (WHERE me.last_score < 80) AS warm,
                       i.agent_name, i.file_name
                FROM xm.match_events me JOIN xm.imports i ON i.id = me.import_id
                WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import'
-               GROUP BY me.import_id, i.agent_name, i.file_name ORDER BY max(me.found_at) DESC LIMIT 1''').fetchone()
+               ''' + scope_sql +
+            ' GROUP BY me.import_id, i.agent_name, i.file_name ORDER BY max(me.found_at) DESC LIMIT 1', scope_params).fetchone()
     return {'unseen': unseen['total'], 'unseen_hot': unseen['hot'], 'since': since, 'last_import': last}
 
 

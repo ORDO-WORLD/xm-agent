@@ -66,10 +66,11 @@ type SourceCardProps = {
   bulk?: { checked: boolean; onToggle: () => void };
   /** In grouped views the sender is already in the header. */
   showSender?: boolean;
+  extra?: ReactNode;
 };
 
 /** One buyer or listing in the list. Tapping it opens its recommendations. */
-export function SourceCard({ row, direction, selected, onSelect, onStatus, bulk, showSender }: SourceCardProps) {
+export function SourceCard({ row, direction, selected, onSelect, onStatus, bulk, showSender, extra }: SourceCardProps) {
   const kind = kindOf(direction);
   const hot = Number(row.hot_count) > 0;
   const name = cleanName(row.contact_name) || (kind === 'buyer' ? 'Buyer tanpa nama' : 'Listing tanpa nama');
@@ -100,6 +101,7 @@ export function SourceCard({ row, direction, selected, onSelect, onStatus, bulk,
           <p className="mt-2.5 line-clamp-2 text-base leading-relaxed text-foreground/85">{structuredSummary(row) || row.raw_text}</p>
           {showSender && row.author && <p className="mt-1 truncate text-sm text-muted">Pengirim: {row.author}</p>}
           <div className="relative z-10 mt-2 flex flex-wrap items-center gap-x-3 gap-y-1"><DuplicateNote row={row} /><RawChat text={row.raw_text || row.normalized_text} /></div>
+          {extra}
         </div>
       </div>
     </article>

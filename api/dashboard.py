@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from db import connect
 from runtime_cache import cached_value
 from tenant import workspace_id
+from matching_scope import history_scope_filter
 
 router = APIRouter(prefix='/dashboard')
 WIB = ZoneInfo('Asia/Jakarta')
@@ -210,12 +211,14 @@ def _distinct(conn, document_type, start, end):
 def _match_counts(conn, start, end):
     low = datetime.combine(start, time.min, WIB)
     high = datetime.combine(end + timedelta(days=1), time.min, WIB)
+    scope_sql, scope_params = history_scope_filter(conn)
     rows = conn.execute(
         '''SELECT (me.found_at AT TIME ZONE 'Asia/Jakarta')::date AS day, count(*) AS total,
                   count(*) FILTER (WHERE me.last_score >= 80) AS hot
            FROM xm.match_events me
            WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active
-             AND me.found_at >= %s AND me.found_at < %s GROUP BY 1''', (low, high)).fetchall()
+             AND me.found_at >= %s AND me.found_at < %s''' + scope_sql + ' GROUP BY 1',
+        [low, high, *scope_params]).fetchall()
     return {row['day']: (row['total'], row['hot']) for row in rows}
 
 

@@ -28,6 +28,8 @@ from stock import clean_contact_name, display_phone
 from tenant import workspace_id
 from workspace import resolve_search, stock_statuses
 from periods import MatchingPeriods
+from matching_scope import history_scope_filter
+from matchlog import PAIR_FIELDS, wib_bounds
 
 router = APIRouter(prefix='/export/all')
 EXPORT_DIR = Path(os.getenv('XM_EXPORT_DIR') or Path(tempfile.gettempdir()) / 'xm-exports')
@@ -48,6 +50,12 @@ class Filters(MatchingPeriods):
     group_by: Literal['sender', 'phone'] | None = None
     # Empty for manual export; an integration stream opts in to delivery deduplication.
     delivery_scope: str = Field(default='', max_length=200)
+    # Recent exports use discovery dates and logged pairs, not posting dates.
+    recent: bool = False
+    found_from: str = ''
+    found_to: str = ''
+    recent_sources: list[uuid.UUID] | None = Field(default=None, max_length=200)
+    recent_events: list[int] | None = Field(default=None, max_length=200)
 
 
 class Part(Filters):
@@ -70,12 +78,67 @@ def scope(conn, request, filters, group_key=None):
     if not workspace_cache.ready(conn):
         raise HTTPException(409, 'Hasil pencocokan sedang disiapkan. Coba lagi sebentar.')
     group_by = filters.group_by or company_row(conn)['listing_group_by'] or 'sender'
+    if filters.recent:
+        return recent_scope(conn, filters, group_by, group_key)
     (clause, date_params), (target_clause, target_params) = filters.windows(filters.direction)
     eligible, params = workspace_cache._eligible(
         filters.direction, resolve_search(conn, request, filters.search), filters.phones, filters.statuses, clause, date_params,
         stock_statuses(filters.stock_status), filters.public_id, group_by, group_key, per_key=True,
         target_clause=target_clause, target_params=target_params, delivery_scope=filters.delivery_scope)
     return group_by, eligible, params
+
+
+def recent_scope(conn, filters, group_by, group_key=None):
+    start, end = wib_bounds(filters.found_from, filters.found_to)
+    scope_sql, scope_params = history_scope_filter(conn)
+    source, target = ('buyer_entity', 'listing_entity') if filters.direction == 'buyer' else ('listing_entity', 'buyer_entity')
+    chosen = temperatures(filters)
+    allowed = list(stock_statuses(filters.stock_status))
+    sql = f'''recent_pairs AS (
+      SELECT me.*,me.{source} source_entity,me.{target} target_entity
+      FROM xm.match_events me JOIN xm.entities se ON se.entity_id=me.{source}
+      JOIN xm.entities te ON te.entity_id=me.{target}
+      WHERE me.company_id=current_setting('xm.workspace_id') AND me.source='import' AND me.active
+        AND me.found_at>=%s AND me.found_at<%s AND se.status=ANY(%s) AND te.status=ANY(%s)''' + scope_sql
+    params = [start, end, allowed, allowed, *scope_params]
+    if chosen == ['hot']:
+        sql += ' AND me.last_score>=80'
+    elif chosen == ['warm']:
+        sql += ' AND me.last_score<80'
+    elif not any(t in chosen for t in ('hot', 'warm')):
+        sql += ' AND false'
+    if filters.recent_sources is not None:
+        sql += f' AND me.{source}=ANY(%s::uuid[])'
+        params.append(filters.recent_sources)
+    if filters.recent_events is not None:
+        sql += ' AND me.id=ANY(%s::bigint[])'
+        params.append(filters.recent_events)
+    key = workspace_cache.GROUP_KEYS[group_by]
+    sql += f'''), eligible AS (
+      SELECT d.id,g.group_id,r.sent_at,r.author,d.contact_name,d.contact_phone,{key} group_key,
+        c.hot_count,c.warm_count
+      FROM (SELECT source_entity,count(*) FILTER(WHERE last_score>=80) hot_count,
+          count(*) FILTER(WHERE last_score<80) warm_count FROM recent_pairs GROUP BY source_entity) c
+      JOIN xm.document_groups g ON g.entity_id=c.source_entity
+      JOIN xm.documents d ON d.id=g.group_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      WHERE g.company_id=current_setting('xm.workspace_id')'''
+    if group_key is not None:
+        sql += f' AND {key}=%s'
+        params.append(group_key)
+    return group_by, sql + ')', params
+
+
+def recent_pairs(conn, eligible, params, ids):
+    sources = conn.execute(f'''SELECT {PAIR_FIELDS} FROM xm.document_groups g
+      JOIN xm.documents d ON d.id=g.group_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      WHERE g.company_id=current_setting('xm.workspace_id') AND d.id=ANY(%s::uuid[])''', (ids,)).fetchall()
+    by_entity = {row['entity_id']: row for row in sources}
+    targets = conn.execute('WITH ' + eligible + f''' SELECT {PAIR_FIELDS},rp.source_entity,rp.last_score score
+      FROM recent_pairs rp JOIN xm.document_groups g ON g.entity_id=rp.target_entity
+      JOIN xm.documents d ON d.id=g.group_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      WHERE g.company_id=current_setting('xm.workspace_id') AND rp.source_entity=ANY(%s::uuid[])
+      ORDER BY rp.source_entity,rp.last_score DESC,rp.found_at DESC,rp.id''', [*params, list(by_entity)]).fetchall()
+    return [(by_entity[row['source_entity']], row) for row in targets]
 
 
 def group_stats(conn, eligible, params, group_by, chosen):
@@ -138,8 +201,10 @@ def part(payload: Part, request: Request):
         _, (target_clause, target_params) = payload.windows(payload.direction)
         found = {group['source']['id']: group for group in workspace_cache.recommendations(
             conn, payload.direction, ids, target_clause=target_clause, target_params=target_params,
-            delivery_scope=payload.delivery_scope)['groups']} if ids else {}
+            delivery_scope=payload.delivery_scope)['groups']} if ids and not payload.recent else {}
+        historical = recent_pairs(conn, eligible, params, ids) if ids and payload.recent else []
     pairs = []
+    pairs += historical
     for source_id in ids:
         group = found.get(source_id)
         if not group:
