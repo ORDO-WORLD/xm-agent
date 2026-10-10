@@ -11,6 +11,7 @@ from auth import _password_hash, current_user
 from db import connect
 from stock import tracked_phones
 from tenant import owner_id, provision_company, workspace_id
+from runtime_cache import invalidate_stats
 
 router = APIRouter()
 
@@ -71,12 +72,18 @@ def put_company_settings(payload: CompanyUpdate, request: Request):
         with connect() as conn:
             if 'matching_mode' in changes:
                 conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042026))")
+                conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042027))")
+            previous = company_row(conn)
             if changes.get('matching_mode') == 'sales':
                 from matching_scope import load_matching_scope
                 load_matching_scope(conn, workspace_id(), 'sales')
             conn.execute(f"UPDATE xm.app_preferences SET {sets}, updated_at = now() WHERE company_id = current_setting('xm.workspace_id')",
                          tuple(changes.values()))
+            if 'matching_mode' in changes and changes['matching_mode'] != previous['matching_mode']:
+                from matching_scope import queue_scope_recompute
+                queue_scope_recompute(conn)
             conn.commit()
+        invalidate_stats(workspace_id())
     return get_company_settings(request)
 
 

@@ -154,14 +154,14 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
             </div>
           </div>
           <div className="space-y-4">
-            <Segmented<MatchingMode> label="Cocokkan berdasarkan" value={matchingMode} onChange={setSelectedMode} fullWidth isDisabled={busy}
+            <Segmented<MatchingMode> label="Cocokkan berdasarkan" value={matchingMode} onChange={setSelectedMode} fullWidth isDisabled={busy || !company?.permissions.manage_settings}
               options={[{ id: 'company', label: 'Company' }, { id: 'sales', label: 'Sales (watchlist)' }]} />
-            <p className="text-sm text-muted">Mode terakhir yang selesai diproses menjadi default pencocokan company.</p>
+            <p className="text-sm text-muted">Pilihan ini menjadi mode pencocokan perusahaan setelah file selesai diproses. Keyword dan nomor sales tetap mengikuti pengaturan perusahaan.</p>
             {matchingMode === 'company' ? (
-              <p className="text-base leading-relaxed text-muted">Mencari pasangan buyer dan listing bila salah satu pesan mengandung keyword company: <strong className="text-foreground">{company?.search_terms.join(' · ') || 'semua pesan (keyword belum diatur)'}</strong>{company?.search_locked ? ' (dikunci oleh company)' : ''}. Nama company pada tanda tangan pesan juga diperiksa.</p>
+              <p className="text-base leading-relaxed text-muted">Sumber buyer atau listing harus memuat keyword perusahaan: <strong className="text-foreground">{company?.search_terms.join(' · ') || 'semua pesan (keyword belum diatur)'}</strong>. Buyer → Listing memakai buyer perusahaan sebagai sumber; Listing → Buyer memakai listing perusahaan sebagai sumber. Keyword pada tanda tangan pesan juga diperiksa.</p>
             ) : (
               <div className="space-y-2">
-                <p className="text-base leading-relaxed text-muted">Mencari pasangan untuk nomor sales dalam watchlist company, termasuk nomor alternatif pada kontak pesan. Nomor pengunggah atau pengirim tidak dipakai sebagai pemilik listing.</p>
+                <p className="text-base leading-relaxed text-muted">Sumber buyer atau listing wajib memiliki nomor kontak sales dalam watchlist perusahaan, termasuk nomor alternatif di pesan. Nomor pengunggah atau pengirim chat tidak menentukan kepemilikan sumber.</p>
                 {noWatchlist ? <Notice status="warning">Watchlist company kosong. Tambahkan nomor melalui <button type="button" className="font-semibold underline" onClick={() => navigate?.('stok')}>Stok Sales</button> sebelum mengunggah dalam mode Sales.</Notice> : <p className="break-words text-sm text-muted">Nomor dipantau: {company?.tracked_phones.join(' · ')}</p>}
               </div>
             )}

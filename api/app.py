@@ -26,6 +26,7 @@ from auth import current_user, router as auth_router, seed_admin
 from integration import authenticate as integration_authenticate, is_export_path, router as integration_router
 from entities import migrate_v4
 from runtime_cache import cached_stats
+from matching_scope import document_scope_filter, history_scope_filter
 
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads"))
@@ -127,41 +128,43 @@ def health():
 
 @app.get("/stats")
 def stats():
-    return cached_stats(workspace_id(), load_stats)
+    with connect() as conn:
+        state = conn.execute("SELECT refreshed_at FROM xm.workspace_cache_state WHERE company_id=current_setting('xm.workspace_id')").fetchone()
+    return cached_stats(workspace_id(), load_stats, version=state['refreshed_at'] if state else None)
 
 
 def load_stats():
-    import workspace_cache
     with connect() as conn:
-        if workspace_cache.ready(conn):
-            row = conn.execute("""SELECT
-              (SELECT count(*) FROM xm.raw_messages WHERE company_id=current_setting('xm.workspace_id')) raw_messages,
-              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='buyer_request' AND status<>'deleted') buyer_requests,
-              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='property_listing' AND status<>'deleted') listings,
-              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='buyer_request' AND status='ready') buyers_ready,
-              (SELECT count(*) FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type='property_listing' AND status='ready') listings_ready,
-              (SELECT count(*) FROM xm.matches WHERE company_id=current_setting('xm.workspace_id')) matches,
-              (SELECT count(*) FROM xm.documents WHERE company_id=current_setting('xm.workspace_id') AND active AND review_status='review') needs_review""").fetchone()
-        else:
-            row = conn.execute("""SELECT
-              (SELECT count(*) FROM xm.raw_messages WHERE company_id=current_setting('xm.workspace_id')) raw_messages,
-              (SELECT count(DISTINCT r.raw_text) FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.document_type='buyer_request') buyer_requests,
-              (SELECT count(DISTINCT r.raw_text) FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.document_type='property_listing') listings,
-              (SELECT count(*) FROM xm.matches WHERE company_id=current_setting('xm.workspace_id')) matches,
-              (SELECT count(*) FROM xm.documents WHERE company_id=current_setting('xm.workspace_id') AND active AND review_status='review') needs_review""").fetchone()
+        scope_sql, scope_params = document_scope_filter(conn)
+        row = conn.execute('''WITH owned AS (
+          SELECT d.id,d.document_type,d.entity_id,coalesce(e.status,'ready') status,d.review_status,r.raw_text
+          FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
+          LEFT JOIN xm.entities e ON e.entity_id=d.entity_id
+          WHERE d.company_id=current_setting('xm.workspace_id') AND d.active ''' + scope_sql + '''
+        ) SELECT
+          (SELECT count(*) FROM xm.raw_messages WHERE company_id=current_setting('xm.workspace_id')) raw_messages,
+          (SELECT count(DISTINCT raw_text) FROM owned WHERE document_type='buyer_request' AND status<>'deleted') buyer_requests,
+          (SELECT count(DISTINCT raw_text) FROM owned WHERE document_type='property_listing' AND status<>'deleted') listings,
+          (SELECT count(DISTINCT raw_text) FROM owned WHERE document_type='buyer_request' AND status='ready') buyers_ready,
+          (SELECT count(DISTINCT raw_text) FROM owned WHERE document_type='property_listing' AND status='ready') listings_ready,
+          (SELECT count(*) FROM xm.matches m WHERE m.company_id=current_setting('xm.workspace_id')
+            AND (m.buyer_request_id IN (SELECT id FROM owned) OR m.property_listing_id IN (SELECT id FROM owned))) matches,
+          (SELECT count(*) FROM owned WHERE review_status='review') needs_review''', scope_params).fetchone()
     return {**row, "qdrant": qdrant_status()}
 
 
 @app.get("/imports")
 def imports():
     with connect() as conn:
+        scope_sql, scope_params = history_scope_filter(conn)
         return conn.execute(
             """SELECT i.*, coalesce(m.total,0) new_matches, coalesce(m.hot,0) new_hot, coalesce(m.warm,0) new_warm
                FROM xm.imports i LEFT JOIN (
                  SELECT import_id, count(*) total, count(*) FILTER (WHERE last_score>=80) hot, count(*) FILTER (WHERE last_score<80) warm
-                 FROM xm.match_events WHERE company_id=current_setting('xm.workspace_id') AND source='import' AND active GROUP BY import_id) m
+                 FROM xm.match_events me WHERE me.company_id=current_setting('xm.workspace_id') AND me.source='import' AND me.active
+                 """ + scope_sql + """ GROUP BY import_id) m
                  ON m.import_id=i.id
-               WHERE i.company_id=current_setting('xm.workspace_id') ORDER BY i.created_at DESC LIMIT 30"""
+               WHERE i.company_id=current_setting('xm.workspace_id') ORDER BY i.created_at DESC LIMIT 30""", scope_params
         ).fetchall()
 
 
@@ -242,9 +245,20 @@ def documents(document_type: str | None = None, limit: int = 50, offset: int = 0
         return conn.execute(query, params).fetchall()
 
 
+def match_pair_scope(conn):
+    """Legacy pair APIs have no direction, so require an owned side of each pair."""
+    clause, params = document_scope_filter(conn)
+    if not clause or clause == ' AND false':
+        return clause, params
+    owned = '''SELECT d.id FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
+      WHERE d.company_id=current_setting('xm.workspace_id') AND d.active ''' + clause
+    return f' AND (m.buyer_request_id IN ({owned}) OR m.property_listing_id IN ({owned}))', params * 2
+
+
 @app.get("/matches")
 def matches(limit: int = 50):
     with connect() as conn:
+        scope_sql, scope_params = match_pair_scope(conn)
         return conn.execute(
             """
             SELECT m.*, br.normalized_text buyer_text, pl.normalized_text listing_text,
@@ -254,9 +268,8 @@ def matches(limit: int = 50):
             FROM xm.matches m
             JOIN xm.documents br ON br.id=m.buyer_request_id
             JOIN xm.documents pl ON pl.id=m.property_listing_id
-            WHERE m.company_id=current_setting('xm.workspace_id')
-            ORDER BY m.score DESC LIMIT %s
-            """, (min(max(limit, 1), 200),)
+            WHERE m.company_id=current_setting('xm.workspace_id') AND br.active AND pl.active
+            """ + scope_sql + ' ORDER BY m.score DESC LIMIT %s', [*scope_params,min(max(limit, 1), 200)]
         ).fetchall()
 
 
@@ -300,6 +313,10 @@ def buyers(
     if agent_name:
         query += " AND d.agent_name=%s"
         params.append(agent_name)
+    with connect() as conn:
+        scope_sql, scope_params = document_scope_filter(conn)
+        query += scope_sql
+        params += scope_params
     query += """ GROUP BY d.id, r.id
                  ORDER BY r.sent_at DESC NULLS LAST
                  LIMIT %s OFFSET %s"""
@@ -311,11 +328,12 @@ def buyers(
 @app.get("/buyers/{buyer_id}/recommendations")
 def buyer_recommendations(buyer_id: uuid.UUID, limit: int = 50):
     with connect() as conn:
+        scope_sql, scope_params = document_scope_filter(conn)
         buyer = conn.execute(
             """SELECT d.*, r.chat_name, r.sent_at, r.author, r.raw_text
                FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
-               WHERE d.id=%s AND d.company_id=current_setting('xm.workspace_id') AND d.document_type='buyer_request'""",
-            (buyer_id,),
+               WHERE d.id=%s AND d.company_id=current_setting('xm.workspace_id') AND d.active AND d.document_type='buyer_request'""" + scope_sql,
+            [buyer_id,*scope_params],
         ).fetchone()
         if not buyer:
             raise HTTPException(404, "Buyer request tidak ditemukan")
@@ -349,14 +367,16 @@ def batch_buyer_recommendations(payload: BuyerBatchRequest):
         raise HTTPException(400, "Maksimum 50 buyer dalam satu pencocokan")
     limit_per_buyer = min(max(payload.limit_per_buyer, 1), 50)
     with connect() as conn:
+        scope_sql, scope_params = document_scope_filter(conn)
         buyers = conn.execute(
             """SELECT d.id, d.agent_name, d.categories, d.locations, d.contact_name, d.contact_phone,
                       d.normalized_text, r.raw_text, r.chat_name, r.sent_at
                FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
                WHERE d.id = ANY(%s::uuid[]) AND d.company_id=current_setting('xm.workspace_id')
-                 AND d.document_type='buyer_request'""",
-            ([str(item) for item in buyer_ids],),
+                 AND d.active AND d.document_type='buyer_request'""" + scope_sql,
+            [[str(item) for item in buyer_ids],*scope_params],
         ).fetchall()
+        buyer_ids = [row['id'] for row in buyers]
         matches = conn.execute(
             """WITH ranked AS (
                  SELECT m.*, row_number() OVER (PARTITION BY m.buyer_request_id ORDER BY m.score DESC) AS rank
@@ -414,12 +434,13 @@ def agent_search(q: str, document_type: str | None = None, limit: int = 10):
     except Exception:
         ids, score_map = [], {}
     with connect() as conn:
+        scope_sql, scope_params = document_scope_filter(conn)
         if ids:
             rows = conn.execute(
                 """SELECT d.*, r.chat_name, r.sent_at, r.raw_text, r.author, e.public_id, e.status AS entity_status FROM xm.documents d
                    JOIN xm.raw_messages r ON r.id=d.raw_message_id LEFT JOIN xm.entities e ON e.entity_id=d.entity_id
                    WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id = ANY(%s::uuid[])
-                     AND coalesce(e.status,'ready')='ready'""", (ids,)
+                     AND coalesce(e.status,'ready')='ready'""" + scope_sql, [ids,*scope_params]
             ).fetchall()
         else:
             term = f"%{q.strip()}%"
@@ -428,9 +449,8 @@ def agent_search(q: str, document_type: str | None = None, limit: int = 10):
                    JOIN xm.raw_messages r ON r.id=d.raw_message_id LEFT JOIN xm.entities e ON e.entity_id=d.entity_id
                    WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND (%s::text IS NULL OR d.document_type=%s)
                      AND coalesce(e.status,'ready')='ready'
-                     AND (d.normalized_text ILIKE %s OR %s = ANY(d.categories))
-                   ORDER BY d.created_at DESC LIMIT %s""",
-                (document_type, document_type, term, category or "", min(limit, 50)),
+                     AND (d.normalized_text ILIKE %s OR %s = ANY(d.categories))""" + scope_sql + ' ORDER BY d.created_at DESC LIMIT %s',
+                [document_type, document_type, term, category or "", *scope_params,min(limit, 50)],
             ).fetchall()
     for row in rows:
         row["semantic_score"] = round(float(score_map.get(str(row["id"]), 0)) * 100, 2)
@@ -441,6 +461,7 @@ def agent_search(q: str, document_type: str | None = None, limit: int = 10):
 @app.get("/agent/matches")
 def agent_matches(contact: str | None = None, min_score: float = 60, limit: int = 20):
     with connect() as conn:
+        scope_sql, scope_params = match_pair_scope(conn)
         base = """SELECT m.score, m.explanation, br.contact_name buyer_contact, br.normalized_text buyer_request,
                          pl.contact_name listing_contact, pl.normalized_text property_listing,
                          be.public_id buyer_id, le.public_id listing_id
@@ -448,17 +469,18 @@ def agent_matches(contact: str | None = None, min_score: float = 60, limit: int 
                   JOIN xm.documents pl ON pl.id=m.property_listing_id
                   LEFT JOIN xm.entities be ON be.entity_id=br.entity_id LEFT JOIN xm.entities le ON le.entity_id=pl.entity_id
                   WHERE m.company_id=current_setting('xm.workspace_id') AND m.score >= %s
-                    AND coalesce(be.status,'ready')='ready' AND coalesce(le.status,'ready')='ready'"""
+                    AND br.active AND pl.active
+                    AND coalesce(be.status,'ready')='ready' AND coalesce(le.status,'ready')='ready'""" + scope_sql
         if contact:
             term = f"%{contact}%"
             rows = conn.execute(
                 base + " AND (br.contact_name ILIKE %s OR pl.contact_name ILIKE %s) ORDER BY m.score DESC LIMIT %s",
-                (min_score, term, term, min(max(limit, 1), 100)),
+                [min_score,*scope_params,term,term,min(max(limit, 1), 100)],
             ).fetchall()
         else:
             rows = conn.execute(
                 base + " ORDER BY m.score DESC LIMIT %s",
-                (min_score, min(max(limit, 1), 100)),
+                [min_score,*scope_params,min(max(limit, 1), 100)],
             ).fetchall()
     return {"results": rows}
 

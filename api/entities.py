@@ -238,14 +238,16 @@ def lookup(conn, company_id: str, query: str, limit: int = 8):
         return []
     exact = exact_public_ids(needle)
     match_sql, match_arg = ('e.public_id = ANY(%s)', exact) if exact else ("replace(e.public_id, '-', '') LIKE %s", '%' + needle + '%')
+    from matching_scope import document_scope_filter
+    scope_sql, scope_params = document_scope_filter(conn)
     return conn.execute(
         f'''SELECT e.entity_id, e.public_id, e.document_type, e.status, d.contact_name, d.categories, d.locations
            FROM xm.entities e
            LEFT JOIN xm.document_groups g ON g.entity_id = e.entity_id
            LEFT JOIN xm.documents d ON d.id = g.group_id
-           WHERE e.company_id = %s AND {match_sql}
-           ORDER BY e.seq DESC LIMIT %s''',
-        (company_id, match_arg, min(max(limit, 1), 20))).fetchall()
+           LEFT JOIN xm.raw_messages r ON r.id=d.raw_message_id
+           WHERE e.company_id = %s AND {match_sql}''' + scope_sql + ' ORDER BY e.seq DESC LIMIT %s',
+        [company_id,match_arg,*scope_params,min(max(limit, 1), 20)]).fetchall()
 
 
 def sync_groups_from_entities(conn, company_id: str) -> int:

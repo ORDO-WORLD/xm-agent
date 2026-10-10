@@ -104,7 +104,7 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
     elif not wanted:
         temp_sql = ' AND false'
     with connect() as conn:
-        scope_sql, scope_params = history_scope_filter(conn)
+        scope_sql, scope_params = history_scope_filter(conn, direction)
         base += scope_sql
         base_params += scope_params
         if source_entity:
@@ -167,12 +167,13 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
 
 
 @router.get('/days')
-def recent_days(date_from: str, date_to: str, include_inactive: bool = False):
+def recent_days(date_from: str, date_to: str, include_inactive: bool = False,
+                direction: Literal['buyer', 'property'] | None = None):
     """Per-day counts for the calendar: how many new matches were found on each Jakarta day."""
     start, end = wib_bounds(date_from, date_to)
     allowed = _filters(include_inactive)
     with connect() as conn:
-        scope_sql, scope_params = history_scope_filter(conn)
+        scope_sql, scope_params = history_scope_filter(conn, direction)
         rows = conn.execute(
             '''SELECT (me.found_at AT TIME ZONE 'Asia/Jakarta')::date AS day, count(*) AS total,
                       count(*) FILTER (WHERE me.last_score >= 80) AS hot, count(*) FILTER (WHERE me.last_score < 80) AS warm
@@ -183,8 +184,10 @@ def recent_days(date_from: str, date_to: str, include_inactive: bool = False):
                ''' + scope_sql + ' GROUP BY 1 ORDER BY 1', [start, end, allowed, allowed, *scope_params]).fetchall()
         latest = conn.execute(
             '''SELECT max(me.found_at AT TIME ZONE 'Asia/Jakarta')::date AS day FROM xm.match_events me
-               WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active''' +
-            scope_sql, scope_params).fetchone()
+               JOIN xm.entities se ON se.entity_id=me.buyer_entity JOIN xm.entities te ON te.entity_id=me.listing_entity
+               WHERE me.company_id = current_setting('xm.workspace_id') AND me.source = 'import' AND me.active
+                 AND se.status=ANY(%s) AND te.status=ANY(%s)''' +
+            scope_sql, [allowed, allowed, *scope_params]).fetchone()
     return {'days': {str(row['day']): {'total': row['total'], 'hot': row['hot'], 'warm': row['warm']} for row in rows},
             'latest_date': str(latest['day']) if latest and latest['day'] else None}
 
@@ -199,12 +202,12 @@ def _seen_at(conn, user_key):
 
 
 @router.get('/summary')
-def recent_summary(request: Request):
+def recent_summary(request: Request, direction: Literal['buyer', 'property'] | None = None):
     """Badge for the navigation, plus what the latest upload produced."""
     user = current_user(request)
     user_key = owner_id() or user['id']
     with connect() as conn:
-        scope_sql, scope_params = history_scope_filter(conn)
+        scope_sql, scope_params = history_scope_filter(conn, direction)
         since = _seen_at(conn, user_key) or (datetime.now(WIB) - timedelta(days=7))
         unseen = conn.execute(
             '''SELECT count(*) AS total, count(*) FILTER (WHERE me.last_score >= 80) AS hot

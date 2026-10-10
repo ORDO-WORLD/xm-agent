@@ -16,6 +16,7 @@ from auth import current_user
 from db import connect
 from parser import normalize_phone
 from tenant import workspace_id
+from runtime_cache import invalidate_stats
 
 router = APIRouter(prefix='/stock')
 WIB = ZoneInfo('Asia/Jakarta')
@@ -158,6 +159,7 @@ def save_tracked(payload: TrackedPayload, request: Request):
     labels = {normalize_phone(key): value.strip()[:80] for key, value in payload.labels.items() if value.strip()}
     company_id = workspace_id()
     with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042027))")
         existing = set(tracked_phones(conn, company_id))
         conn.execute('DELETE FROM xm.tracked_sales WHERE company_id = %s AND NOT (phone = ANY(%s))', (company_id, phones))
         for phone in phones:
@@ -168,8 +170,15 @@ def save_tracked(payload: TrackedPayload, request: Request):
         added = [phone for phone in phones if phone not in existing]
         if added:
             snapshot_stock(conn, company_id, 'tracking', added, note='Mulai dipantau')
+        if existing != set(phones):
+            current_mode = conn.execute('SELECT matching_mode FROM xm.app_preferences WHERE company_id=%s', (company_id,)).fetchone()
+            if current_mode and current_mode['matching_mode'] == 'sales':
+                from matching_scope import queue_scope_recompute
+                queue_scope_recompute(conn)
         conn.commit()
-        return _overview(conn, company_id)
+        result = _overview(conn, company_id)
+    invalidate_stats(company_id)
+    return result
 
 
 @router.post('/snapshot')

@@ -8,15 +8,15 @@ _stats_cache = {}
 _values = {}
 
 
-def cached_stats(workspace, loader):
-    """Several open tabs poll /stats; share one short-lived result per workspace."""
+def cached_stats(workspace, loader, *, version=None):
+    """Share counters per workspace, refreshing immediately after a worker rebuild."""
     with _lock:
         cached = _stats_cache.get(workspace)
-        if cached is not None and time.monotonic() - cached[0] < STATS_TTL:
+        if cached is not None and cached[2] == version and time.monotonic() - cached[0] < STATS_TTL:
             return cached[1]
     value = loader()
     with _lock:
-        _stats_cache[workspace] = (time.monotonic(), value)
+        _stats_cache[workspace] = (time.monotonic(), value, version)
     return value
 
 

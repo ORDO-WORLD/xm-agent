@@ -316,8 +316,8 @@ class SearchLockTests(V4Case):
         self.assertEqual(mine['terms'], ['Bravo'])
         self.assertEqual(mine['company_terms'], ['Alpha'])
         self.assertEqual(self.call(self.boss, '/search-default')['terms'], ['Alpha'])      # others unaffected
-        # Not locked: the member's own phrase decides what the list shows.
-        self.assertEqual(len(self.rows(direction='property', search='Bravo')), 1)
+        # Personal phrases narrow the company source set, including when editing is unlocked.
+        self.assertEqual(self.rows(direction='property', search='Bravo'), [])
         # Lock: personal list is ignored, server uses the company keywords no matter what is sent.
         self.call(self.boss, '/search-default', 'PUT', {'terms': ['Alpha'], 'locked': True})
         locked = self.call(self.staff, '/search-default')
@@ -327,8 +327,10 @@ class SearchLockTests(V4Case):
         self.assertIn('Alpha', found[0]['raw_text'])
         self.assertIn('Alpha', self.rows(direction='property', search='')[0]['raw_text'])
         self.call(self.staff, '/search-default/personal', 'PUT', {'terms': ['Bravo']}, status=403)
-        # The boss is not restricted by the lock and can still look at everything.
-        self.assertEqual(len(self.rows(client=self.boss, direction='property', search='')), 2)
+        # Company admins also use the company scope on matching views.
+        boss_rows = self.rows(client=self.boss, direction='property', search='')
+        self.assertEqual(len(boss_rows), 1)
+        self.assertIn('Alpha', boss_rows[0]['raw_text'])
         # Unlock and reset to the company default.
         self.call(self.boss, '/search-default', 'PUT', {'terms': ['Alpha'], 'locked': False})
         self.assertEqual(self.call(self.staff, '/search-default')['terms'], ['Bravo'])

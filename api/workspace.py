@@ -10,9 +10,11 @@ from reindex import glossary_values
 from auth import current_user
 from company import company_row, effective_terms, personal_terms
 from entities import STATUSES
-from tenant import owner_id
+from tenant import owner_id, workspace_id
 from search_terms import normalize_terms, search_filter
 from periods import MatchingPeriods, date_filter, matching_windows
+from matching_scope import document_scope_filter, queue_scope_recompute
+from runtime_cache import invalidate_stats
 
 router = APIRouter()
 
@@ -135,13 +137,19 @@ def save_search_default(payload: SearchDefault, request: Request = None):
         raise HTTPException(400, 'Default pencarian wajib diisi.')
     user = current_user(request) if request is not None else None
     with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042027))")
+        previous = company_row(conn)
         if payload.locked is None:
             conn.execute("UPDATE xm.app_preferences SET search_terms=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')", (terms,))
         else:
             conn.execute("UPDATE xm.app_preferences SET search_terms=%s,search_locked=%s,updated_at=now() WHERE company_id=current_setting('xm.workspace_id')",
                          (terms, payload.locked))
+        if previous['matching_mode'] == 'company' and {term.casefold() for term in previous['search_terms']} != {term.casefold() for term in terms}:
+            queue_scope_recompute(conn)
         conn.commit()
-        return search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
+        state = search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
+    invalidate_stats(workspace_id())
+    return state
 
 
 class PersonalSearch(BaseModel):
@@ -218,22 +226,27 @@ def workspace_dates(direction: Literal['buyer','property']='buyer', date_from: s
     kind='buyer_request' if direction=='buyer' else 'property_listing'
     with connect() as conn:
         import workspace_cache
+        scope_sql, scope_params = document_scope_filter(conn)
         if workspace_cache.ready(conn):
-            latest=conn.execute("SELECT max(last_seen_at)::date latest_date FROM xm.document_groups WHERE company_id=current_setting('xm.workspace_id') AND document_type=%s AND status='ready'",(kind,)).fetchone()
+            latest=conn.execute('''SELECT max(r.sent_at)::date latest_date
+              FROM xm.document_group_members gm JOIN xm.document_groups g ON g.group_id=gm.group_id
+              JOIN xm.documents d ON d.id=gm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
+              WHERE g.company_id=current_setting('xm.workspace_id') AND d.active
+                AND g.document_type=%s AND g.status='ready' ''' + scope_sql, [kind, *scope_params]).fetchone()
             rows=conn.execute('''SELECT r.sent_at::date posted_day,count(DISTINCT gm.group_id) count
               FROM xm.document_group_members gm JOIN xm.document_groups g ON g.group_id=gm.group_id
               JOIN xm.documents d ON d.id=gm.document_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
-              WHERE g.company_id=current_setting('xm.workspace_id') AND g.document_type=%s AND g.status='ready' AND r.sent_at >= %s AND r.sent_at < %s
-              GROUP BY r.sent_at::date''',(kind,start,end)).fetchall()
+              WHERE g.company_id=current_setting('xm.workspace_id') AND d.active AND g.document_type=%s AND g.status='ready' AND r.sent_at >= %s AND r.sent_at < %s
+              ''' + scope_sql + ' GROUP BY r.sent_at::date',[kind,start,end,*scope_params]).fetchall()
             return {'counts':{str(row['posted_day'])[:10]:int(row['count']) for row in rows},
                     'latest_date':str(latest['latest_date'])[:10] if latest['latest_date'] else None}
         latest=conn.execute("""SELECT max(r.sent_at)::date AS latest_date
           FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
-          WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.document_type=%s""",(kind,)).fetchone()
+          WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.document_type=%s""" + scope_sql,[kind,*scope_params]).fetchone()
         rows=conn.execute("""SELECT r.sent_at::date AS posted_day,count(DISTINCT r.raw_text) AS count
           FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
           WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.document_type=%s
-            AND r.sent_at >= %s AND r.sent_at < %s GROUP BY r.sent_at::date""",(kind,start,end)).fetchall()
+            AND r.sent_at >= %s AND r.sent_at < %s""" + scope_sql + ' GROUP BY r.sent_at::date',[kind,start,end,*scope_params]).fetchall()
     return {'counts': {str(row['posted_day'])[:10]:int(row['count']) for row in rows},
             'latest_date': str(latest['latest_date'])[:10] if latest['latest_date'] else None}
 
@@ -272,6 +285,7 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
         if workspace_cache.ready(conn):
             return workspace_cache.sources(conn,direction,search,phones,statuses,clause,date_params,offset,chosen,public_id,group_by or None,group_key,
                                            target_clause, target_params)
+        scope_sql, scope_params = document_scope_filter(conn)
     kind, relation = ('buyer_request','buyer_request_id') if direction=='buyer' else ('property_listing','property_listing_id')
     other = 'property_listing_id' if direction == 'buyer' else 'buyer_request_id'
     selected=set(statuses.split(','))
@@ -291,6 +305,8 @@ def workspace(direction: Literal['buyer','property']='buyer', search: str='', ph
     search_clause, search_params = search_filter(search)
     query += search_clause
     params += search_params
+    query += scope_sql
+    params += scope_params
     if phones.strip() and direction=='property':
         import re
         numbers=[normalize_phone(v) for v in re.split(r'[,;\n]+',phones) if v.strip()]
@@ -378,6 +394,9 @@ def recommendations(payload: Batch):
         if workspace_cache.ready(conn):
             return workspace_cache.recommendations(conn,payload.direction,ids,tuple(payload.target_status) or ('ready',), target_clause, target_params,
                                                    source_clause=source_clause, source_params=source_params)
+        scope_clause, scope_params = document_scope_filter(conn)
+        source_clause += scope_clause
+        source_params = [*source_params, *scope_params]
         sources=conn.execute('''SELECT d.*,r.raw_text,r.chat_name,r.sent_at FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''' + source_clause,
                              [ids,kind,*source_params]).fetchall()
         ids = [source['id'] for source in sources]
@@ -440,4 +459,4 @@ def export_pdf(payload: Export):
         if p.target_id and target is None: raise HTTPException(409,'Hasil pencocokan berubah. Muat ulang lalu pilih kembali.')
         if not p.target_id and group['recommendations']: raise HTTPException(409,'Data sudah memiliki kecocokan. Muat ulang hasil.')
         selected.append((group['source'],target))
-    return Response(build_report(selected,payload.direction),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="XM-Matching-Report.pdf"'})
+    return Response(build_report(selected,payload.direction),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="Property-Matching-Report.pdf"'})

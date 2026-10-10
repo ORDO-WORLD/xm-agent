@@ -33,6 +33,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
   const api = useApi();
   const { user } = useSession();
   const { company, stats } = useCompany();
+  const scopeKey = JSON.stringify([company?.matching_mode, company?.search_terms, company?.tracked_phones]);
   // A link such as #/beranda?dari=2026-09-01&sampai=2026-09-30 opens that period directly.
   const [period, setPeriod] = useState<{ preset: string; from: string; to: string }>(() => {
     const from = params?.get('dari') ?? '';
@@ -41,8 +42,11 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
   });
   const [budgetKind, setBudgetKind] = useState<'sale' | 'rent'>('sale');
 
-  const { data, error, loading, reload } = useData((signal) => api.get<Dashboard>(
-    `/dashboard/overview?${query({ period: period.preset === 'custom' ? 'custom' : period.preset, date_from: period.from, date_to: period.to })}`, signal), [period.preset, period.from, period.to]);
+  const overview = useData((signal) => api.get<Dashboard>(
+    `/dashboard/overview?${query({ period: period.preset === 'custom' ? 'custom' : period.preset, date_from: period.from, date_to: period.to })}`, signal)
+    .then((value) => ({ scopeKey, value })), [scopeKey, period.preset, period.from, period.to], !!company);
+  const { error, loading, reload } = overview;
+  const data = overview.data?.scopeKey === scopeKey ? overview.data.value : undefined;
 
   const canUpload = !!company?.permissions.upload_data;
   const trendLabels = useMemo(() => (data ? data.trend.labels.map((iso) => labelFor(iso, data.period.bucket)) : []), [data]);
@@ -80,6 +84,8 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
           </div>
         </div>
       </BlurFade>
+
+      <p className="text-sm leading-relaxed text-muted">{company?.matching_mode === 'sales' ? `Ringkasan mengikuti nomor sales dalam watchlist perusahaan: ${company.tracked_phones.join(' · ') || 'belum ada nomor'}.` : company?.search_terms.length ? `Ringkasan mengikuti keyword perusahaan: ${company.search_terms.join(' · ')}.` : 'Ringkasan menampilkan data perusahaan ini. Keyword perusahaan belum diatur.'}</p>
 
       <section aria-label="Pilih periode" className="space-y-2">
         <div className="flex items-center gap-2 text-base font-bold"><CalendarRange className="size-5 text-accent" aria-hidden="true" />Periode yang dilihat</div>
@@ -132,7 +138,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
         </Panel>
       )}
 
-      <RecentFeed onOpen={() => navigate?.('match-baru')} />
+      <RecentFeed key={scopeKey} onOpen={() => navigate?.('match-baru')} />
 
       {data && !empty && (
         <div className="grid gap-5 lg:grid-cols-2">
@@ -234,7 +240,7 @@ function RecentFeed({ onOpen }: { onOpen: () => void }) {
   const groups = feed.data?.groups ?? [];
   if (!groups.length) return null;
   return (
-    <Panel title={<span className="flex items-center gap-2"><Sparkles className="size-5 text-hot" aria-hidden="true" />Match terbaru minggu ini</span>} description="Pasangan baru dari upload data Anda."
+    <Panel title={<span className="flex items-center gap-2"><Sparkles className="size-5 text-hot" aria-hidden="true" />Match terbaru minggu ini</span>} description="Buyer perusahaan → listing, berdasarkan aturan perusahaan."
       action={<button type="button" onClick={onOpen} className="min-h-10 text-base font-semibold text-accent">Lihat semua</button>}>
       <AnimatedList delay={650} className="items-stretch gap-3">
         {groups.map((group) => {

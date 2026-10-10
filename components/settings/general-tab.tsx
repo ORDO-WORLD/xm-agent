@@ -67,24 +67,24 @@ export function GeneralTab() {
         </div>
       </Panel>
 
-      <Panel title="Mode pencocokan otomatis" description="Berlaku saat upload dan proses ulang. Salah satu sisi pasangan harus termasuk company atau sales yang dipantau; sisi lainnya dicari dari seluruh data company.">
+      <Panel title="Mode pencocokan otomatis" description="Berlaku di Cocokkan, Match Terbaru, dashboard, dan export. Buyer → Listing wajib bersumber dari buyer perusahaan; Listing → Buyer wajib bersumber dari listing perusahaan. Pasangan dicari dari data yang tersedia di perusahaan ini.">
         <Segmented<MatchingMode> label="Cocokkan berdasarkan" value={company?.matching_mode ?? 'company'} fullWidth isDisabled={!admin || !!busy || modeProcessing}
-          onChange={(matching_mode) => { void run('mode', async () => { await api.put('/company/settings', { matching_mode }); setModeJob(await api.post<{ status: string }>('/index/recompute')); }, 'Mode disimpan. Pencocokan dihitung ulang di latar belakang.'); }}
+          onChange={(matching_mode) => { void run('mode', async () => { await api.put('/company/settings', { matching_mode }); setModeJob(await api.post<{ status: string }>('/index/recompute')); }, 'Mode disimpan. Aturan langsung berlaku; hasil diperbarui di latar belakang.'); }}
           options={[{ id: 'company', label: 'Company (keyword)' }, { id: 'sales', label: 'Sales (watchlist)' }]} />
-        {(busy === 'mode' || modeProcessing) && <div className="mt-3"><LoadingIndicator message={modeJob?.status === 'queued' ? 'Menunggu antrean pencocokan…' : 'Memperbarui pencocokan sesuai mode yang dipilih…'} /></div>}
+        {(busy === 'mode' || modeProcessing) && <div className="mt-3"><LoadingIndicator message={modeJob?.status === 'queued' ? 'Aturan langsung berlaku. Pembaruan hasil menunggu antrean…' : 'Memperbarui hasil pencocokan sesuai aturan perusahaan di latar belakang…'} /></div>}
         {modeJob?.status === 'failed' && <Notice status="danger">{modeJob.error || 'Pencocokan belum berhasil diperbarui.'}</Notice>}
         <p className="mt-3 text-sm text-muted">{admin ? 'Mode Sales memerlukan minimal satu nomor di watchlist Stok Sales.' : 'Hanya super admin yang dapat mengubah mode pencocokan otomatis.'}</p>
       </Panel>
 
       <Panel title={<span className="flex items-center gap-2"><Search className="size-5 text-accent" aria-hidden="true" />Kata kunci pencarian</span>}
-        description="Pencocokan hanya memakai pesan yang mengandung salah satu kata atau frasa ini (misalnya nama kantor Anda). Satu kata/frasa per baris, atau pisahkan dengan koma. Maksimal 20.">
+        description="Pada mode Company, sumber buyer atau listing wajib memuat salah satu kata atau frasa ini, termasuk dalam tanda tangan pesan. Satu kata/frasa per baris, atau pisahkan dengan koma. Maksimal 20.">
         {!state && <p className="text-base text-muted">Memuat…</p>}
         {state && admin && (
           <div className="space-y-4">
             <Switch isSelected={filterOn} onChange={setFilterOn}>
               <Switch.Content><Switch.Control><Switch.Thumb /></Switch.Control>
                 <span className="text-base font-bold">Saring pesan dengan kata kunci
-                  <span className="mt-0.5 block text-[0.95rem] font-normal text-muted">{filterOn ? 'Hanya pesan yang mengandung kata kunci di bawah yang dipakai.' : 'Semua pesan yang diunggah dipakai, tanpa saringan.'}</span></span>
+                  <span className="mt-0.5 block text-[0.95rem] font-normal text-muted">{filterOn ? 'Sumber pencocokan wajib memuat kata kunci di bawah.' : 'Semua pesan perusahaan dapat menjadi sumber, tanpa saringan kata kunci.'}</span></span>
               </Switch.Content>
             </Switch>
             {filterOn && (
@@ -101,13 +101,13 @@ export function GeneralTab() {
               <Switch isSelected={locked} onChange={setLocked}>
                 <Switch.Content><Switch.Control><Switch.Thumb /></Switch.Control>
                   <span className="text-base font-bold"><LockKeyhole className="mr-1.5 inline size-4" aria-hidden="true" />Kunci kata kunci untuk semua anggota
-                    <span className="mt-0.5 block text-[0.95rem] font-normal text-muted">Bila aktif, anggota tim tidak bisa mengubah kata kunci dan selalu memakai pengaturan company di atas. Bila tidak, setiap anggota boleh membuat daftar sendiri.</span></span>
+                    <span className="mt-0.5 block text-[0.95rem] font-normal text-muted">Bila aktif, anggota tim tidak bisa mengubah filter kata kunci. Bila tidak, anggota boleh menambahkan filter sendiri untuk mempersempit sumber yang sudah sesuai aturan perusahaan.</span></span>
                 </Switch.Content>
               </Switch>
             </div>
             <Button size="lg" isPending={busy === 'terms'}
               isDisabled={(filterOn && (!terms.length || tooMany)) || (filterOn === state.company_terms.length > 0 && (!filterOn || toLines(terms) === toLines(state.company_terms)) && locked === state.locked)}
-              onPress={() => void run('terms', async () => { const saved = await api.put<SearchState>('/search-default', filterOn ? { terms, locked } : { terms: [], clear: true, locked }); setState(saved); setText(toLines(saved.company_terms)); setLocked(saved.locked); setFilterOn(saved.company_terms.length > 0); }, 'Kata kunci disimpan')}>
+              onPress={() => void run('terms', async () => { const saved = await api.put<SearchState>('/search-default', filterOn ? { terms, locked } : { terms: [], clear: true, locked }); setState(saved); setText(toLines(saved.company_terms)); setLocked(saved.locked); setFilterOn(saved.company_terms.length > 0); if (company?.matching_mode === 'company') setModeJob(await api.get<{ status: string; error?: string } | null>('/index/status').catch(() => null)); }, 'Kata kunci disimpan. Aturan perusahaan langsung berlaku.')}>
               <Save className="size-4" aria-hidden="true" />Simpan kata kunci
             </Button>
           </div>
@@ -127,7 +127,7 @@ export function GeneralTab() {
                   <Label className="text-base font-bold">Kata kunci saya</Label>
                   <TextArea rows={4} className="text-base" />
                 </TextField>
-                <p className="text-sm text-muted">Hanya berlaku untuk akun Anda. Akun lain tetap memakai pengaturan masing-masing.</p>
+                <p className="text-sm text-muted">Filter tambahan ini hanya berlaku untuk akun Anda dan mempersempit sumber yang sudah sesuai keyword perusahaan.</p>
                 <div className="flex flex-wrap gap-2">
                   <Button size="lg" isPending={busy === 'personal'} isDisabled={!terms.length || tooMany}
                     onPress={() => void run('personal', async () => { const saved = await api.put<SearchState>('/search-default/personal', { terms }); setState(saved); }, 'Kata kunci Anda disimpan')}><Save className="size-4" aria-hidden="true" />Simpan kata kunci saya</Button>

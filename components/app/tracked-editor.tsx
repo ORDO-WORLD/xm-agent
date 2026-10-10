@@ -5,6 +5,7 @@ import { Button, Description, Label, Modal, TextArea, TextField, toast, type use
 import { Notice } from '@/components/app/primitives';
 import { errorMessage } from '@/lib/api';
 import { formatPhone, normalizePhone } from '@/lib/format';
+import { useCompany } from '@/lib/session';
 import type { StockTracked } from '@/lib/types';
 import { useApi } from '@/lib/workspace-context';
 
@@ -24,6 +25,7 @@ export function TrackedEditor({ state, current, onSaved }: { state: ReturnType<t
 
 function TrackedForm({ current, onClose, onSaved }: { current: StockTracked[]; onClose: () => void; onSaved: () => void }) {
   const api = useApi();
+  const { company } = useCompany();
   const [text, setText] = useState(() => current.map((item) => item.phone).join(', '));
   const [labels, setLabels] = useState<Record<string, string>>(() => Object.fromEntries(current.filter((item) => item.label).map((item) => [item.phone, item.label as string])));
   const [busy, setBusy] = useState(false);
@@ -41,7 +43,8 @@ function TrackedForm({ current, onClose, onSaved }: { current: StockTracked[]; o
     setBusy(true); setError('');
     try {
       await api.put('/stock/tracked', { phones: parsed.valid.map((row) => row.phone), labels });
-      toast.success(`${parsed.valid.length} nomor sales dipantau`);
+      const phonesChanged = parsed.valid.length !== current.length || parsed.valid.some((row) => !current.some((item) => item.phone === row.phone));
+      toast.success(company?.matching_mode === 'sales' && phonesChanged ? 'Watchlist disimpan. Aturan langsung berlaku; hasil pencocokan diperbarui di latar belakang.' : `${parsed.valid.length} nomor sales dipantau`);
       onClose();
       onSaved();
     } catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
@@ -53,6 +56,7 @@ function TrackedForm({ current, onClose, onSaved }: { current: StockTracked[]; o
       <Modal.Header><Modal.Heading>Atur nomor sales yang dipantau</Modal.Heading></Modal.Header>
       <Modal.Body className="space-y-4">
         <Notice status="accent">Pengaturan ini berlaku untuk <strong>seluruh company</strong>. Sistem menghitung listing yang mencantumkan nomor itu di pesannya, dan mencatatnya otomatis setiap upload.</Notice>
+        <p className="text-sm leading-relaxed text-muted">Pada mode Sales, watchlist langsung membatasi sumber di Cocokkan, Match Terbaru, dashboard, dan export. Perubahan nomor juga memperbarui hasil pencocokan di latar belakang.</p>
         <TextField value={text} onChange={setText} fullWidth>
           <Label className="text-base font-bold">Nomor telepon (pisahkan dengan koma)</Label>
           <TextArea rows={4} className="text-base" placeholder="6282233744657, 6281202310022" />

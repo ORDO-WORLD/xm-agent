@@ -150,8 +150,9 @@ def _recompute_matches(company_id, limit_per_request, source='recompute', import
             with conn.cursor() as cur: cur.executemany(insert_sql,pending)
         refresh_workspace_cache(conn,company_id)
         # The mode applied by this upload also governs later maintenance runs.
-        conn.execute('UPDATE xm.app_preferences SET matching_mode=%s, updated_at=now() WHERE company_id=%s',
-                     (scope.mode, company_id))
+        if matching_mode is not None:
+            conn.execute('UPDATE xm.app_preferences SET matching_mode=%s, updated_at=now() WHERE company_id=%s',
+                         (scope.mode, company_id))
         found = log_matches(conn, company_id, source, import_id, agent_name)
         if source == 'import':
             import stock

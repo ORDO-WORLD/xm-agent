@@ -25,8 +25,13 @@ class WorkspaceDatabaseRegression(unittest.TestCase):
         cls.patch.start()
         cls.job = uuid.uuid4()
         cls.tag = 'group-test-' + str(cls.job)
+        from tenant import provision_company, workspace_scope
+        cls.company_id = 'xm-test-' + str(cls.job)
+        cls.scope = workspace_scope(cls.company_id)
+        cls.scope.__enter__()
         with connect_test_db() as conn:
             conn.execute(Path(__file__).with_name('schema.sql').read_text())
+            provision_company(conn, cls.company_id)
             conn.execute("INSERT INTO xm.imports(id,agent_name,file_name,file_path,file_sha256) VALUES(%s,%s,'test','test',%s)", (cls.job,cls.tag,cls.tag))
             for index in range(205):
                 for copy in range(2):
@@ -49,11 +54,13 @@ class WorkspaceDatabaseRegression(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        from harness import WORKSPACE_TABLES
         with connect_test_db() as conn:
-            conn.execute('DELETE FROM xm.raw_messages WHERE import_id=%s',(cls.job,))
-            conn.execute('DELETE FROM xm.imports WHERE id=%s',(cls.job,))
+            for table in WORKSPACE_TABLES:
+                conn.execute(f'DELETE FROM xm.{table} WHERE company_id=%s', (cls.company_id,))
             conn.commit()
         cls.patch.stop()
+        cls.scope.__exit__(None, None, None)
 
     def test_multiple_search_phrases_use_or(self):
         rows = self.module.workspace(search=self.tag+' buyer 0\n'+self.tag+' buyer 204')['rows']
@@ -114,7 +121,7 @@ class WorkspaceDatabaseRegression(unittest.TestCase):
             self.assertEqual(self.module.workspace_dates('property','2026-09-01','2026-10-01'),calendar)
         finally:
             with connect_test_db() as conn:
-                conn.execute('DELETE FROM xm.workspace_cache_state')
+                conn.execute('DELETE FROM xm.workspace_cache_state WHERE company_id=%s', (self.company_id,))
                 conn.commit()
 
 

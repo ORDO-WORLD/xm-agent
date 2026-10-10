@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from entities import assign_entities, cache_lock, exact_public_ids, normalize_id_query
 from search_terms import search_filter
 from tenant import workspace_id
+from matching_scope import document_scope_filter
 
 # What a "group" key means when listings are grouped by sender or phone number.
 GROUP_KEYS = {
@@ -87,7 +88,7 @@ def unsent_clause(scope, buyer='b.entity_id', listing='p.entity_id'):
 
 
 def _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key, per_key=False,
-              target_clause='', target_params=(), delivery_scope=''):
+              target_clause='', target_params=(), delivery_scope='', *, conn):
     """Shared CTE: one representative posting per group, after every list filter.
 
     ``per_key`` keeps one posting per group *and* sender/phone, so a text posted by two sales counts for both,
@@ -130,6 +131,9 @@ def _eligible(direction, search, phones, statuses, clause, date_params, stock_st
     search_clause, search_params = search_filter(search)
     sql += search_clause
     params += search_params
+    scope_clause, scope_params = document_scope_filter(conn)
+    sql += scope_clause
+    params += scope_params
     if public_id and public_id.strip():
         needle = normalize_id_query(public_id)
         if needle:
@@ -159,7 +163,7 @@ def sources(conn, direction, search, phones, statuses, clause, date_params, offs
             stock_statuses=DEFAULT_TARGET_STATUSES, public_id='', group_by=None, group_key=None,
             target_clause='', target_params=()):
     eligible, params = _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, group_key,
-                                 target_clause=target_clause, target_params=target_params)
+                                 target_clause=target_clause, target_params=target_params, conn=conn)
     # No text equality or matching aggregation on the interactive read path.
     query = 'WITH ' + eligible + ''', page AS (SELECT * FROM eligible ORDER BY sent_at DESC NULLS LAST,id LIMIT 201 OFFSET %s)
       SELECT d.*,r.raw_text,r.chat_name,r.sent_at,r.author,p.duplicate_count,g.last_seen_at,g.public_id,g.status AS entity_status,
@@ -178,7 +182,7 @@ def group_summary(conn, direction, search, phones, statuses, clause, date_params
     if group_by not in GROUP_KEYS:
         raise HTTPException(400, 'Pengelompokan tidak dikenal.')
     eligible, params = _eligible(direction, search, phones, statuses, clause, date_params, stock_statuses, public_id, group_by, None,
-                                 target_clause=target_clause, target_params=target_params)
+                                 target_clause=target_clause, target_params=target_params, conn=conn)
     having = ''
     if group_search.strip():
         having = " HAVING e.group_key ILIKE %s OR coalesce(mode() WITHIN GROUP (ORDER BY e.contact_name),'') ILIKE %s"
@@ -204,12 +208,13 @@ def recommendations(conn, direction, ids, target_statuses=DEFAULT_TARGET_STATUSE
                     source_clause='', source_params=()):
     kind='buyer_request' if direction=='buyer' else 'property_listing'
     relation,other=('buyer_group_id','property_group_id') if direction=='buyer' else ('property_group_id','buyer_group_id')
+    scope_clause, scope_params = document_scope_filter(conn)
     sources=conn.execute('''SELECT d.*,r.raw_text,r.chat_name,r.sent_at,r.author,g.public_id,g.status AS entity_status
       FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
       LEFT JOIN xm.document_group_members sm ON sm.document_id=d.id
       LEFT JOIN xm.document_groups g ON g.group_id=sm.group_id
-      WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''' + source_clause,
-      [ids,kind,*source_params]).fetchall()
+      WHERE d.company_id=current_setting('xm.workspace_id') AND d.active AND d.id=ANY(%s) AND d.document_type=%s''' + source_clause + scope_clause,
+      [ids,kind,*source_params,*scope_params]).fetchall()
     ids = [source['id'] for source in sources]
     # Target status may include on-hold for an explicitly requested detail view.
     targets, values = target_window(direction, target_clause, target_params)

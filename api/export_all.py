@@ -84,13 +84,13 @@ def scope(conn, request, filters, group_key=None):
     eligible, params = workspace_cache._eligible(
         filters.direction, resolve_search(conn, request, filters.search), filters.phones, filters.statuses, clause, date_params,
         stock_statuses(filters.stock_status), filters.public_id, group_by, group_key, per_key=True,
-        target_clause=target_clause, target_params=target_params, delivery_scope=filters.delivery_scope)
+        target_clause=target_clause, target_params=target_params, delivery_scope=filters.delivery_scope, conn=conn)
     return group_by, eligible, params
 
 
 def recent_scope(conn, filters, group_by, group_key=None):
     start, end = wib_bounds(filters.found_from, filters.found_to)
-    scope_sql, scope_params = history_scope_filter(conn)
+    scope_sql, scope_params = history_scope_filter(conn, filters.direction)
     source, target = ('buyer_entity', 'listing_entity') if filters.direction == 'buyer' else ('listing_entity', 'buyer_entity')
     chosen = temperatures(filters)
     allowed = list(stock_statuses(filters.stock_status))

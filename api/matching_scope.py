@@ -48,25 +48,59 @@ def load_matching_scope(conn, company_id, mode=None, *, require_sales=True):
     return MatchingScope(mode, terms=tuple(term.casefold() for term in normalize_terms(row['search_terms'])))
 
 
-def history_scope_filter(conn):
-    """Apply current ownership rules to historical events, without rewriting them.
-
-    The two uncorrelated subqueries can be hashed by PostgreSQL: do not scan
-    source messages separately for every event in a large import history.
-    """
+def document_scope_filter(conn):
+    """Mandatory company ownership filter for document/raw-message aliases d/r."""
     scope = load_matching_scope(conn, workspace_id(), require_sales=False)
     if scope.mode == 'company':
         # contact_name can fall back to the WhatsApp sender when a signature
         # is absent; the sender is not evidence of company ownership.
         clause, params = search_filter(list(scope.terms), include_contact=False)
-        if not clause:
-            return '', []
     else:
         if not scope.phones:
             return ' AND false', []
         clause = ' AND (d.contact_phones && %s::text[] OR d.contact_phone=ANY(%s))'
         params = [list(scope.phones), list(scope.phones)]
+    return clause, params
+
+
+def history_scope_filter(conn, direction=None):
+    """Filter the chosen source by current rules; aggregate views accept either side.
+
+    Events are undirected history. A company listing can match an external buyer,
+    but that buyer must never become a source in the company buyer gallery.
+    Uncorrelated subqueries let PostgreSQL hash the monitored entities once.
+    """
+    clause, params = document_scope_filter(conn)
+    if not clause or clause == ' AND false':
+        return clause, params
     monitored = '''SELECT d.entity_id FROM xm.documents d
       JOIN xm.raw_messages r ON r.id=d.raw_message_id
       WHERE d.company_id=current_setting('xm.workspace_id') AND d.active''' + clause
+    if direction is not None:
+        source = {'buyer': 'buyer_entity', 'property': 'listing_entity'}[direction]
+        return f' AND me.{source} IN ({monitored})', params
     return f' AND (me.buyer_entity IN ({monitored}) OR me.listing_entity IN ({monitored}))', params * 2
+
+
+def queue_scope_recompute(conn):
+    """Refresh cached pairs after ownership changes in the same settings transaction.
+
+    A processing job may already have read the previous rules. Flag it for one
+    successor after completion, preserving the single active job per company.
+    """
+    import uuid
+
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042027))")
+    scope = load_matching_scope(conn, workspace_id(), require_sales=False)
+    if scope.mode == 'sales' and not scope.phones:
+        return None
+    if not conn.execute("SELECT 1 FROM xm.documents WHERE company_id=current_setting('xm.workspace_id') AND active LIMIT 1").fetchone():
+        return None
+    active = conn.execute("SELECT * FROM xm.maintenance_jobs WHERE company_id=current_setting('xm.workspace_id') AND status IN ('queued','processing') ORDER BY created_at LIMIT 1 FOR UPDATE").fetchone()
+    if active:
+        if active['status'] == 'processing':
+            return conn.execute("""UPDATE xm.maintenance_jobs
+              SET result=coalesce(result,'{}'::jsonb) || '{"scope_changed":true}'::jsonb
+              WHERE id=%s RETURNING *""", (active['id'],)).fetchone()
+        return active
+    return conn.execute('INSERT INTO xm.maintenance_jobs(id) VALUES(%s) RETURNING *', (uuid.uuid4(),)).fetchone()

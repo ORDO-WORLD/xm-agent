@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from db import connect
 from runtime_cache import cached_value
 from tenant import workspace_id
-from matching_scope import history_scope_filter
+from matching_scope import document_scope_filter, history_scope_filter
 
 router = APIRouter(prefix='/dashboard')
 WIB = ZoneInfo('Asia/Jakarta')
@@ -190,21 +190,23 @@ def make_insights(ctx):
 
 def _daily(conn, document_type, start, end):
     low, high = bounds(start, end)
+    scope_sql, scope_params = document_scope_filter(conn)
     rows = conn.execute(
         '''SELECT r.sent_at::date AS day, count(DISTINCT d.entity_id) AS n
            FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id JOIN xm.entities e ON e.entity_id = d.entity_id
            WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = %s AND e.status <> 'deleted'
-             AND r.sent_at >= %s AND r.sent_at < %s GROUP BY 1''', (document_type, low, high)).fetchall()
+             AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql + ' GROUP BY 1', [document_type, low, high, *scope_params]).fetchall()
     return {row['day']: row['n'] for row in rows}
 
 
 def _distinct(conn, document_type, start, end):
     low, high = bounds(start, end)
+    scope_sql, scope_params = document_scope_filter(conn)
     row = conn.execute(
         '''SELECT count(DISTINCT d.entity_id) AS n
            FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id JOIN xm.entities e ON e.entity_id = d.entity_id
            WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = %s AND e.status <> 'deleted'
-             AND r.sent_at >= %s AND r.sent_at < %s''', (document_type, low, high)).fetchone()
+             AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql, [document_type, low, high, *scope_params]).fetchone()
     return row['n']
 
 
@@ -226,19 +228,21 @@ OVERVIEW_TTL = 30
 
 
 def _imports_version():
-    """Changes whenever an upload finishes. The worker is another process, so it cannot clear this API's cache."""
+    """Imports and rebuilds invalidate read caches across API/worker processes."""
     with connect() as conn:
         row = conn.execute(
-            '''SELECT count(*) AS n, max(finished_at) AS last FROM xm.imports
+            '''SELECT count(*) AS n, max(finished_at) AS last,
+                 (SELECT refreshed_at FROM xm.workspace_cache_state WHERE company_id=current_setting('xm.workspace_id')) AS refreshed
+               FROM xm.imports
                WHERE company_id = current_setting('xm.workspace_id') AND status = 'completed' ''').fetchone()
-    return row['n'], row['last']
+    return row['n'], row['last'], row['refreshed']
 
 
 @router.get('/overview')
 def overview(period: Literal['week', 'last_week', 'month', 'last_month', 'last30', 'custom'] = 'week',
              date_from: str = '', date_to: str = ''):
     # Several people and tabs open the same period; the figures only need to be a few seconds fresh.
-    # A finished upload is part of the key, so new data never hides behind a cached answer.
+    # Finished uploads and recomputations never hide behind a cached answer.
     return cached_value(workspace_id(), ('overview', period, date_from, date_to, _imports_version()), OVERVIEW_TTL,
                         lambda: compute_overview(period, date_from, date_to))
 
@@ -253,6 +257,7 @@ def compute_overview(period, date_from, date_to):
               'custom': pretty_day(start) if start == end else f'{pretty_day(start)} – {pretty_day(end)}'}
     with connect() as conn:
         ws = workspace_id()
+        scope_sql, scope_params = document_scope_filter(conn)
         buyer_daily = _daily(conn, 'buyer_request', start, end)
         listing_daily = _daily(conn, 'property_listing', start, end)
         kpi = {
@@ -268,40 +273,42 @@ def compute_overview(period, date_from, date_to):
             '''SELECT coalesce(d.primary_category, 'unknown') AS k, count(DISTINCT d.entity_id) AS n
                FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id JOIN xm.entities e ON e.entity_id = d.entity_id
                WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = 'buyer_request'
-                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s GROUP BY 1 ORDER BY 2 DESC, 1''', (low, high)).fetchall()]
+                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql + ' GROUP BY 1 ORDER BY 2 DESC, 1', [low, high, *scope_params]).fetchall()]
         transactions = [{'key': row['k'], 'label': TRANSACTION_LABELS.get(row['k'], row['k']), 'value': row['n']} for row in conn.execute(
             '''SELECT d.transaction_type AS k, count(DISTINCT d.entity_id) AS n
                FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id JOIN xm.entities e ON e.entity_id = d.entity_id
                WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = 'buyer_request'
-                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s GROUP BY 1 ORDER BY 2 DESC''', (low, high)).fetchall()]
+                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql + ' GROUP BY 1 ORDER BY 2 DESC', [low, high, *scope_params]).fetchall()]
         locations = conn.execute(
             '''SELECT loc AS k, count(DISTINCT d.entity_id) AS n
                FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id JOIN xm.entities e ON e.entity_id = d.entity_id
                CROSS JOIN LATERAL unnest(d.locations) AS loc
                WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = 'buyer_request'
-                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 80''',
-            (low, high)).fetchall()
+                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql + ' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 80',
+            [low, high, *scope_params]).fetchall()
         locations = [row for row in locations if is_place(row['k'])][:40]
         demand_locations = {row['k']: row['n'] for row in locations}
         stock_by_category = {row['k']: row['n'] for row in conn.execute(
             '''SELECT coalesce(d.primary_category, 'unknown') AS k, count(DISTINCT d.entity_id) AS n
-               FROM xm.documents d JOIN xm.entities e ON e.entity_id = d.entity_id
+               FROM xm.documents d JOIN xm.entities e ON e.entity_id = d.entity_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
                WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = 'property_listing'
-                 AND e.status = 'ready' GROUP BY 1''').fetchall()}
+                 AND e.status = 'ready' ''' + scope_sql + ' GROUP BY 1', scope_params).fetchall()}
         stock_by_location = {row['k']: row['n'] for row in conn.execute(
             '''SELECT loc AS k, count(DISTINCT d.entity_id) AS n
-               FROM xm.documents d JOIN xm.entities e ON e.entity_id = d.entity_id
+               FROM xm.documents d JOIN xm.entities e ON e.entity_id = d.entity_id JOIN xm.raw_messages r ON r.id=d.raw_message_id
                CROSS JOIN LATERAL unnest(d.locations) AS loc
                WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = 'property_listing'
-                 AND e.status = 'ready' AND loc = ANY(%s) GROUP BY 1''', (list(demand_locations),)).fetchall()} if demand_locations else {}
+                 AND e.status = 'ready' AND loc = ANY(%s)''' + scope_sql + ' GROUP BY 1', [list(demand_locations), *scope_params]).fetchall()} if demand_locations else {}
         budget_rows = conn.execute(
             '''SELECT DISTINCT ON (d.entity_id) d.transaction_type, d.price_min, d.price_max, d.price_basis
                FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id JOIN xm.entities e ON e.entity_id = d.entity_id
                WHERE d.company_id = current_setting('xm.workspace_id') AND d.active AND d.document_type = 'buyer_request'
-                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s
-               ORDER BY d.entity_id, r.sent_at DESC''', (low, high)).fetchall()
+                 AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql + '''
+               ORDER BY d.entity_id, r.sent_at DESC''', [low, high, *scope_params]).fetchall()
         status_rows = conn.execute(
-            'SELECT document_type, status, count(*) AS n FROM xm.entities WHERE company_id = %s GROUP BY 1, 2', (ws,)).fetchall()
+            '''SELECT e.document_type,e.status,count(*) AS n FROM xm.entities e WHERE e.company_id=%s
+               AND e.entity_id IN (SELECT d.entity_id FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
+                 WHERE d.company_id=e.company_id AND d.active ''' + scope_sql + ') GROUP BY 1,2', [ws,*scope_params]).fetchall()
         match_daily = _match_counts(conn, start, end)
         match_prev = _match_counts(conn, info['prev_start'], info['prev_end'])
         pref = conn.execute('SELECT listing_group_by FROM xm.app_preferences WHERE company_id = %s', (ws,)).fetchone()
@@ -311,10 +318,10 @@ def compute_overview(period, date_from, date_to):
             f'''SELECT {key_sql} AS k, count(*) AS n, mode() WITHIN GROUP (ORDER BY d.contact_name) AS contact_name
                 FROM xm.document_groups g JOIN xm.documents d ON d.id = g.group_id JOIN xm.raw_messages r ON r.id = d.raw_message_id
                 WHERE g.company_id = current_setting('xm.workspace_id') AND g.document_type = 'property_listing' AND g.status = 'ready'
-                GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10''').fetchall()
+                ''' + scope_sql + ' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 10', scope_params).fetchall()
         latest = conn.execute(
             '''SELECT max(r.sent_at)::date AS day FROM xm.documents d JOIN xm.raw_messages r ON r.id = d.raw_message_id
-               WHERE d.company_id = current_setting('xm.workspace_id') AND d.active''').fetchone()
+               WHERE d.company_id = current_setting('xm.workspace_id') AND d.active''' + scope_sql, scope_params).fetchone()
     bucket, labels_x, buyers_series = bucket_series(buyer_daily, start, end)
     _, _, listings_series = bucket_series(listing_daily, start, end)
     match_days = {day: values[0] for day, values in match_daily.items()}

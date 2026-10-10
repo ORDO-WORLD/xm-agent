@@ -41,6 +41,7 @@ type RowsResponse = { rows: Row[]; has_more: boolean };
 type Base = Record<string, string>;
 const ALL_PERIOD: Period = { preset: 'all', from: '', to: '' };
 const OPEN_FILTERS: Partial<ListFilters> = { buyerPeriod: ALL_PERIOD, listingPeriod: ALL_PERIOD, temps: ['hot', 'warm', 'unmatched'], stock: ['ready'], publicId: '', phones: '' };
+const EMPTY_MARKERS: Record<Direction, Record<string, number>> = { buyer: {}, property: {} };
 
 function toggle<T>(list: T[], item: T) {
   return list.includes(item) ? list.filter((value) => value !== item) : [...list, item];
@@ -49,6 +50,8 @@ function toggle<T>(list: T[], item: T) {
 export default function MatchPage({ params, navigate }: { params?: URLSearchParams; navigate?: Navigate }) {
   const api = useApi();
   const { company } = useCompany();
+  const hasCompany = !!company;
+  const scopeKey = JSON.stringify([company?.matching_mode, company?.search_terms, company?.tracked_phones]);
 
   const [direction, setDirection] = useState<Direction>(params?.get('arah') === 'property' ? 'property' : 'buyer');
   // A link naming one item or one sales number must show everything of theirs, not only Hot/Warm matches that are still Ready.
@@ -61,7 +64,8 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   const [grouped, setGrouped] = useState(!params?.get('id') && !params?.get('nomor'));
   // Arriving from a link that names one item opens straight into its recommendations.
   const [mobileDetail, setMobileDetail] = useState(() => !!params?.get('id'));
-  const [markers, setMarkers] = useState<Record<Direction, Record<string, number>>>({ buyer: {}, property: {} });
+  const [markerCache, setMarkerCache] = useState<Record<string, Record<Direction, Record<string, number>>>>({});
+  const markers = markerCache[scopeKey] ?? EMPTY_MARKERS;
   const urlDirection = params?.get('arah');
 
   // Remember the last direction and the Hot/Warm choice per person.
@@ -79,7 +83,7 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
 
   const groupBy: GroupBy = company?.listing_group_by ?? 'sender';
   const salesMode = company?.matching_mode === 'sales';
-  const search = salesMode ? '' : (company?.effective_terms ?? []).join('\n');
+  const search = salesMode ? '' : (company?.effective_terms ?? company?.search_terms ?? []).join('\n');
   const debouncedId = useDebounced(filters.publicId, 350);
   const debouncedPhones = useDebounced(filters.phones, 500);
   const useGroups = direction === 'property' && grouped;
@@ -100,8 +104,18 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
 
   const loadMarkers = useCallback((kind: Direction, monthIso: string) => {
     void api.get<{ counts: Record<string, number> }>(`/workspace/dates?${query({ direction: kind, date_from: monthIso, date_to: shiftDay(monthIso, 62) })}`)
-      .then((result) => setMarkers((current) => ({ ...current, [kind]: { ...current[kind], ...result.counts } }))).catch(() => {});
-  }, [api]);
+      .then((result) => setMarkerCache((current) => {
+        const saved = current[scopeKey] ?? EMPTY_MARKERS;
+        return { ...current, [scopeKey]: { ...saved, [kind]: { ...saved[kind], ...result.counts } } };
+      })).catch(() => {});
+  }, [api, scopeKey]);
+
+  useEffect(() => {
+    if (!hasCompany) return;
+    const month = monthStart(todayWib());
+    loadMarkers('buyer', month);
+    loadMarkers('property', month);
+  }, [hasCompany, loadMarkers]);
 
   const sourceLabel = direction === 'buyer' ? 'buyer' : 'listing';
   const targetLabel = direction === 'buyer' ? 'listing' : 'buyer';
@@ -109,10 +123,10 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Cocokkan" description={`Pilih satu ${sourceLabel} di daftar, lalu lihat ${targetLabel} yang paling cocok.`} />
+      <PageHeader title="Cocokkan" description={`Pilih ${sourceLabel} milik perusahaan di daftar, lalu lihat ${targetLabel} yang paling cocok.`} />
 
       <fieldset aria-label="Arah pencocokan" className="m-0 grid min-w-0 gap-3 border-0 p-0 sm:grid-cols-2">
-        {([['buyer', 'Buyer → Listing', 'Cari listing yang sesuai kebutuhan seorang buyer.', UsersRound], ['property', 'Listing → Buyer', 'Temukan buyer untuk sebuah listing.', Building2]] as const).map(([id, title, text, Icon]) => (
+        {([['buyer', 'Buyer → Listing', 'Cari listing untuk buyer milik perusahaan.', UsersRound], ['property', 'Listing → Buyer', 'Temukan buyer untuk listing milik perusahaan.', Building2]] as const).map(([id, title, text, Icon]) => (
           <button key={id} type="button" aria-pressed={direction === id} onClick={() => changeDirection(id)}
             className={cn('flex items-start gap-3.5 rounded-2xl border p-4 text-left transition', direction === id ? 'border-accent bg-accent-soft/60 ring-2 ring-accent/25' : 'border-border bg-surface hover:border-accent/50')}>
             <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-2xl', direction === id ? 'bg-accent text-accent-foreground' : 'bg-default text-muted')}><Icon className="size-5" aria-hidden="true" /></span>
@@ -169,14 +183,15 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
                 </SearchField>
               )}
             </div>
+            <p className="text-sm text-muted">Filter ID dan nomor sales hanya mempersempit daftar sumber yang sudah sesuai aturan perusahaan.</p>
           </div>
         </details>
-        <p className="text-sm text-muted">{salesMode ? <>Mode Sales — watchlist company: <strong className="text-foreground">{company?.tracked_phones.join(' · ') || 'belum ada nomor'}</strong>.</> : <>Mode Company — pencarian kata kunci: <strong className="text-foreground">{(company?.effective_terms ?? []).join(' · ') || 'semua pesan'}</strong>{company?.search_locked ? ' (dikunci oleh super admin)' : ''}.</>} Ubah di <button type="button" className="font-semibold text-accent underline" onClick={() => navigate?.('pengaturan')}>Pengaturan</button>.</p>
+        <p className="text-sm leading-relaxed text-muted">{salesMode ? <>Sumber {sourceLabel} wajib memiliki nomor kontak dalam watchlist perusahaan: <strong className="text-foreground">{company?.tracked_phones.join(' · ') || 'belum ada nomor'}</strong>.</> : company?.search_terms.length ? <>Sumber {sourceLabel} wajib memuat keyword perusahaan: <strong className="text-foreground">{company.search_terms.join(' · ')}</strong>.</> : <>Menampilkan sumber {sourceLabel} dari data perusahaan ini. Keyword perusahaan belum diatur.</>} Aturan ini berlaku pada daftar, hasil, dan export.{company?.permissions.manage_settings ? <> Kelola aturan di <button type="button" className="font-semibold text-accent underline" onClick={() => navigate?.('pengaturan')}>Pengaturan</button>.</> : <> Aturan dikelola oleh super admin perusahaan.</>}</p>
       </Panel>
 
       {/* Remounting on every new list resets the selection, paging and open groups without any syncing effects. */}
       <MatchWorkspace
-        key={`${JSON.stringify(base)}|${useGroups}|${groupBy}`}
+        key={`${scopeKey}|${JSON.stringify(base)}|${useGroups}|${groupBy}`}
         direction={direction} base={base} useGroups={useGroups} groupBy={groupBy} enabled={prefsReady && !!company}
         temps={filters.temps} grouped={grouped} onGrouped={setGrouped} canSetGrouping={!!company?.permissions.manage_settings}
         mobileDetail={mobileDetail} onMobileDetail={setMobileDetail} linkedId={params?.get('id') ?? ''}
@@ -301,7 +316,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
         {/* ------------------------------------------------------------ list */}
         <section aria-label={`Daftar ${sourceLabel}`} aria-busy={useGroups ? groups.loading : flat.loading} className={cn('min-w-0 space-y-3', mobileDetail && 'hidden xl:block')}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-bold">{direction === 'buyer' ? 'Buyer' : 'Listing'}{!useGroups && flat.data ? <span className="ml-2 text-base font-normal text-muted">{number(flat.data.rows.length)}{flat.data.has_more ? '+' : ''} ditampilkan</span> : null}</h2>
+            <h2 className="text-lg font-bold">Sumber · {direction === 'buyer' ? 'Buyer' : 'Listing'}{!useGroups && flat.data ? <span className="ml-2 text-base font-normal text-muted">{number(flat.data.rows.length)}{flat.data.has_more ? '+' : ''} ditampilkan</span> : null}</h2>
             <div className="flex flex-wrap items-center gap-2">
               {direction === 'property' && (
                 <Switch isSelected={grouped} onChange={onGrouped} aria-label="Kelompokkan listing per sales">

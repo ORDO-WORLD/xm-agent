@@ -13,7 +13,7 @@ import { BorderBeam } from '@/components/magicui/border-beam';
 import { NumberTicker } from '@/components/magicui/number-ticker';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
 import { query } from '@/lib/api';
-import { dateTime, mondayOf, number, prettyRange, shiftDay, todayWib } from '@/lib/format';
+import { asWib, dateTime, mondayOf, number, prettyRange, shiftDay, todayWib } from '@/lib/format';
 import type { Navigate } from '@/lib/router';
 import { useCompany } from '@/lib/session';
 import { useData } from '@/lib/use-data';
@@ -48,12 +48,17 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
   const [temps, setTemps] = useState<Temperature[]>(['hot', 'warm']);
   const [period, setPeriod] = useState<Period>({ preset: 'today', from: today, to: today });
   const [includeInactive, setIncludeInactive] = useState(false);
-  const filterKey = [direction, period.from, period.to, temps.join(','), includeInactive].join('|');
+  const scopeKey = JSON.stringify([company?.matching_mode, company?.search_terms, company?.tracked_phones]);
+  const filterKey = [scopeKey, direction, period.from, period.to, temps.join(','), includeInactive].join('|');
   // Paging restarts by itself whenever a filter changes: the extra rows belong to one filter key.
   const [more, setMore] = useState({ key: '', extra: 0 });
   const limit = 30 + (more.key === filterKey ? more.extra : 0);
-  const [markers, setMarkers] = useState<Record<string, number>>({});
-  const [latest, setLatest] = useState<string | null>(null);
+  const markerKey = `${scopeKey}|${direction}|${includeInactive}`;
+  const [calendar, setCalendar] = useState<{ key: string; markers: Record<string, number>; latest: string | null }>({ key: '', markers: {}, latest: null });
+  const markers = calendar.key === markerKey ? calendar.markers : {};
+  const latest = calendar.key === markerKey ? calendar.latest : null;
+  const currentMarkerKey = useRef(markerKey);
+  useEffect(() => { currentMarkerKey.current = markerKey; }, [markerKey]);
   const [opened, setOpened] = useState<{ key: string; group: RecentGroup } | null>(null);
   const active = opened?.key === filterKey ? opened.group : null;
   const [selection, setSelection] = useState<{ key: string; ids: string[]; enabled: boolean }>({ key: '', ids: [], enabled: false });
@@ -63,7 +68,7 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
   const [exportFilters, setExportFilters] = useState<Record<string, unknown>>({});
   const [exportDirection, setExportDirection] = useState<Direction>('buyer');
 
-  const summary = useData((signal) => api.get<Summary>('/matches/recent/summary', signal), []);
+  const summary = useData((signal) => api.get<Summary>(`/matches/recent/summary?${query({ direction })}`, signal), [scopeKey, direction]);
   const data = useData(async (signal) => {
     const groups: RecentGroup[] = [];
     let result: RecentResponse;
@@ -72,8 +77,10 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
       groups.push(...result.groups);
       if (!result.has_more || groups.length >= limit) break;
     }
-    return { ...result, groups };
+    return { ...result, groups, filterKey };
   }, [filterKey, limit]);
+
+  const results = data.data?.filterKey === filterKey ? data.data : undefined;
 
   // Reading the page counts as seeing the matches; give the person a moment first.
   const since = summary.data?.since;
@@ -85,15 +92,15 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
   }, [summary.data, markSeen]);
 
   const loadMarkers = useCallback((monthIso: string) => {
-    void api.get<Days>(`/matches/recent/days?${query({ date_from: monthIso, date_to: shiftDay(monthIso, 62) })}`).then((result) => {
-      setLatest(result.latest_date);
-      setMarkers((current) => ({ ...current, ...Object.fromEntries(Object.entries(result.days).map(([day, value]) => [day, value.total])) }));
+    void api.get<Days>(`/matches/recent/days?${query({ direction, include_inactive: includeInactive, date_from: monthIso, date_to: shiftDay(monthIso, 62) })}`).then((result) => {
+      if (currentMarkerKey.current !== markerKey) return;
+      setCalendar((current) => ({ key: markerKey, latest: result.latest_date, markers: { ...(current.key === markerKey ? current.markers : {}), ...Object.fromEntries(Object.entries(result.days).map(([day, value]) => [day, value.total])) } }));
     }).catch(() => {});
-  }, [api]);
+  }, [api, direction, includeInactive, markerKey]);
   useEffect(() => { loadMarkers(`${shiftDay(today, -45).slice(0, 8)}01`); }, [loadMarkers, today]);
 
-  const totals = data.data?.totals;
-  const last = summary.data?.last_import;
+  const totals = results?.totals;
+  const last = summary.loading ? null : summary.data?.last_import;
   const isNew = useCallback((found: string) => !!since && new Date(found).getTime() > new Date(since).getTime(), [since]);
   const { request: requestStatus, dialog: statusDialog } = useStatusActions(() => { setOpened(null); data.reload(); summary.reload(); });
   const changeStatus = (row: Row, status: EntityStatus) => requestStatus({ refs: [row.entity_id ?? row.id], status, previous: row.entity_status ?? 'ready', name: `${row.document_type === 'buyer_request' ? 'Buyer' : 'Listing'} ${row.public_id ?? ''}` });
@@ -125,7 +132,7 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
               </p>
               <p className="mt-0.5 text-base text-muted">{dateTime(last.found_at)} · menghasilkan <strong className="text-foreground">{number(last.total)}</strong> match baru ({last.hot} Hot, {last.warm} Warm)</p>
             </div>
-            <Button variant="primary" size="lg" onPress={() => { const day = last.found_at.slice(0, 10); setPeriod({ preset: 'custom', from: day, to: day }); }}>Lihat hasil upload ini<ArrowRight className="size-4" aria-hidden="true" /></Button>
+            <Button variant="primary" size="lg" onPress={() => { const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(asWib(last.found_at) ?? new Date()); setPeriod({ preset: 'custom', from: day, to: day }); }}>Lihat hasil upload ini<ArrowRight className="size-4" aria-hidden="true" /></Button>
           </div>
         </div>
       )}
@@ -153,7 +160,7 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
         </div>
       </Panel>
 
-      <p className="text-sm text-muted">{company?.matching_mode === 'sales' ? 'Hanya pasangan dengan setidaknya satu nomor sales dalam watchlist perusahaan.' : company?.search_terms?.length ? `Hanya pasangan dengan setidaknya satu pesan yang memuat keyword perusahaan: ${company.search_terms.join(', ')}.` : 'Menampilkan pasangan dari data perusahaan ini.'} Aturan perusahaan juga berlaku pada riwayat dan export.</p>
+      <p className="text-sm text-muted">{company?.matching_mode === 'sales' ? `Sumber ${direction === 'buyer' ? 'buyer' : 'listing'} wajib memiliki nomor sales dalam watchlist perusahaan.` : company?.search_terms?.length ? `Sumber ${direction === 'buyer' ? 'buyer' : 'listing'} wajib memuat keyword perusahaan: ${company.search_terms.join(', ')}.` : 'Menampilkan sumber dari data perusahaan ini.'} Aturan yang sama berlaku pada detail dan export.</p>
 
       {totals && (
         <div className="grid grid-cols-3 gap-3">
@@ -166,34 +173,34 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><p className="font-bold">Galeri {direction === 'buyer' ? 'buyer' : 'listing'}</p><p className="text-sm text-muted">Klik kartu untuk melihat detail dan hasil pencocokan.</p></div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" isDisabled={data.loading || !!data.error || !data.data?.groups.length} onPress={() => setSelection({ key: filterKey, enabled: !bulkMode, ids: [] })}>{bulkMode ? 'Selesai memilih' : 'Pilih beberapa'}</Button>
-          <Button variant="primary" isDisabled={data.loading || !!data.error || !data.data?.groups.length} onPress={() => exportResults()}><Download className="size-4" aria-hidden="true" />Export semua PDF</Button>
+          <Button variant="secondary" isDisabled={data.loading || !!data.error || !results?.groups.length} onPress={() => setSelection({ key: filterKey, enabled: !bulkMode, ids: [] })}>{bulkMode ? 'Selesai memilih' : 'Pilih beberapa'}</Button>
+          <Button variant="primary" isDisabled={data.loading || !!data.error || !results?.groups.length} onPress={() => exportResults()}><Download className="size-4" aria-hidden="true" />Export semua PDF</Button>
         </div>
       </div>
       {bulkMode && <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/25 bg-accent-soft p-3">
-        <div className="flex flex-wrap items-center gap-2"><span className="font-semibold">{selected.length} kartu dipilih</span><Button variant="tertiary" onPress={() => setSelection({ key: filterKey, enabled: true, ids: (data.data?.groups ?? []).map((group) => group.source.entity_id!).slice(0, 200) })}>Pilih kartu yang tampil</Button><Button variant="tertiary" onPress={() => setSelection({ key: filterKey, enabled: true, ids: [] })}>Kosongkan</Button></div>
+        <div className="flex flex-wrap items-center gap-2"><span className="font-semibold">{selected.length} kartu dipilih</span><Button variant="tertiary" onPress={() => setSelection({ key: filterKey, enabled: true, ids: (results?.groups ?? []).map((group) => group.source.entity_id!).slice(0, 200) })}>Pilih kartu yang tampil</Button><Button variant="tertiary" onPress={() => setSelection({ key: filterKey, enabled: true, ids: [] })}>Kosongkan</Button></div>
         <Button variant="primary" isDisabled={data.loading || !selected.length} onPress={() => exportResults({ recent_sources: selected })}><Download className="size-4" aria-hidden="true" />Export {selected.length} kartu PDF</Button>
       </div>}
       <ErrorNotice message={data.error} onRetry={data.reload} />
-      {data.loading && !data.data && <LoadingRows rows={3} />}
-      {data.loading && data.data && <LoadingIndicator />}
+      {data.loading && !results && <LoadingRows rows={3} />}
+      {data.loading && results && <LoadingIndicator />}
 
-      {!data.loading && data.data && data.data.groups.length === 0 && (
+      {!data.loading && results && results.groups.length === 0 && (
         <div className="xm-card">
-          <EmptyState animation="match-found" title={`Belum ada match baru pada ${prettyRange(data.data.date_from, data.data.date_to)}`}
+          <EmptyState animation="match-found" title={`Belum ada match baru pada ${prettyRange(results.date_from, results.date_to)}`}
             description={temps.length === 0 ? 'Aktifkan Hot dan/atau Warm di atas.' : latest ? `Match terbaru terakhir ditemukan pada ${prettyRange(latest, latest)}.` : 'Match baru muncul otomatis setelah Anda mengunggah data chat dan ada pasangan buyer–listing baru.'}
             action={latest ? <Button variant="primary" size="lg" onPress={() => setPeriod({ preset: 'custom', from: latest, to: latest })}>Lihat {prettyRange(latest, latest)}</Button> : undefined} />
         </div>
       )}
 
-      <div aria-busy={data.loading} inert={data.loading || !!data.error} className={cn('grid items-start gap-4 sm:grid-cols-2 2xl:grid-cols-3 transition-opacity', data.loading && data.data && 'opacity-60')}>
-        {data.data?.groups.map((group) => (
+      <div aria-busy={data.loading} inert={data.loading || !!data.error} className={cn('grid items-start gap-4 sm:grid-cols-2 2xl:grid-cols-3 transition-opacity', data.loading && results && 'opacity-60')}>
+        {results?.groups.map((group) => (
           <SourceCard key={group.source.entity_id} row={{ ...group.source, hot_count: group.hot_count, warm_count: group.warm_count, match_count: group.pair_count }} direction={direction} selected={active?.source.entity_id === group.source.entity_id} onSelect={() => setOpened({ key: filterKey, group })} onStatus={(status) => changeStatus(group.source, status)} showSender
             bulk={bulkMode ? { checked: selected.includes(group.source.entity_id!), onToggle: () => toggleSource(group.source.entity_id!) } : undefined}
             extra={<div className="mt-3 border-t border-separator pt-3"><p className="text-sm text-muted">Ditemukan {dateTime(group.latest_found_at)}{isNew(group.latest_found_at) ? ' · Baru' : ''}</p><p className="mt-1 text-sm font-semibold text-accent">Lihat {number(group.pair_count)} hasil pencocokan →</p></div>} />
         ))}
       </div>
-      {data.data?.has_more && <Button variant="secondary" size="lg" fullWidth isDisabled={data.loading} onPress={() => setMore({ key: filterKey, extra: limit - 30 + 30 })}>Tampilkan lebih banyak</Button>}
+      {results?.has_more && <Button variant="secondary" size="lg" fullWidth isDisabled={data.loading} onPress={() => setMore({ key: filterKey, extra: limit - 30 + 30 })}>Tampilkan lebih banyak</Button>}
       {active && <RecentDetailModal key={filterKey + active.source.entity_id} group={active} direction={direction} filters={{ date_from: period.from, date_to: period.to, temps: temps.join(','), include_inactive: includeInactive }} onClose={() => setOpened(null)} onStatus={changeStatus} onExport={(ids) => exportResults(ids ? { recent_events: ids } : { recent_sources: [active.source.entity_id] })} onManual={navigate ? () => { setOpened(null); navigate('cocokkan', { arah: direction, id: active.source.public_id }); } : undefined} />}
       <ExportAllModal state={exportState} direction={exportDirection} filters={exportFilters} />
       {statusDialog}

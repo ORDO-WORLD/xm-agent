@@ -163,6 +163,15 @@ class CacheTests(unittest.TestCase):
             runtime_cache.cached_value('c', 'bad', 60, lambda: (_ for _ in ()).throw(HTTPException(400, 'x')))
         self.assertEqual(runtime_cache.cached_value('c', 'bad', 60, lambda: 'ok'), 'ok')
 
+    def test_worker_rebuild_refreshes_stats_without_waiting_for_expiry(self):
+        self.assertEqual(runtime_cache.cached_stats('company-a', lambda: 'before', version=1), 'before')
+        self.assertEqual(runtime_cache.cached_stats('company-a', lambda: 'unused', version=1), 'before')
+        self.assertEqual(runtime_cache.cached_stats('company-b', lambda: 'other', version=1), 'other')
+        self.assertEqual(runtime_cache.cached_stats('company-a', lambda: 'after', version=2), 'after')
+        self.assertEqual(runtime_cache.cached_stats('company-b', lambda: 'unused', version=1), 'other')
+        runtime_cache.invalidate_stats('company-a')
+        self.assertEqual(runtime_cache.cached_stats('company-a', lambda: 'settings changed', version=2), 'settings changed')
+
 
 if __name__ == '__main__':
     unittest.main()
