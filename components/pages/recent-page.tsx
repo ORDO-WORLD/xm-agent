@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Chip, Switch, ToggleButton, ToggleButtonGroup } from '@heroui/react';
 import { ArrowRight, Check, Sparkles, TrendingUp } from 'lucide-react';
-import { EmptyState, ErrorNotice, IdChip, LoadingRows, PageHeader, Panel, Segmented, StatusChip, TemperatureChip } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, IdChip, LoadingIndicator, LoadingRows, PageHeader, Panel, Segmented, StatusChip, TemperatureChip } from '@/components/app/primitives';
 import { PeriodPicker, type Period, type Preset } from '@/components/app/period-picker';
 import { RawChat, WhatsAppButton } from '@/components/match/cards';
 import { BorderBeam } from '@/components/magicui/border-beam';
@@ -133,8 +133,9 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
 
       <ErrorNotice message={data.error} onRetry={data.reload} />
       {data.loading && !data.data && <LoadingRows rows={3} />}
+      {data.loading && data.data && <LoadingIndicator />}
 
-      {data.data && data.data.groups.length === 0 && (
+      {!data.loading && data.data && data.data.groups.length === 0 && (
         <div className="xm-card">
           <EmptyState animation="match-found" title={`Belum ada match baru pada ${prettyRange(data.data.date_from, data.data.date_to)}`}
             description={temps.length === 0 ? 'Aktifkan Hot dan/atau Warm di atas.' : latest ? `Match terbaru terakhir ditemukan pada ${dateOnly(latest)}.` : 'Match baru muncul otomatis setelah Anda mengunggah data chat dan ada pasangan buyer–listing baru.'}
@@ -142,7 +143,7 @@ export default function RecentPage({ navigate }: { navigate?: Navigate }) {
         </div>
       )}
 
-      <div className={cn('space-y-4 transition-opacity', data.loading && data.data && 'opacity-60')}>
+      <div aria-busy={data.loading} inert={data.loading} className={cn('space-y-4 transition-opacity', data.loading && data.data && 'opacity-60')}>
         {data.data?.groups.map((group) => (
           <RecentGroupCard key={group.source.entity_id} group={group} direction={direction} isNew={isNew} onOpen={() => goOpen(group)} />
         ))}

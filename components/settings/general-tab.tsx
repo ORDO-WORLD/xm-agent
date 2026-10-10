@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 import { Button, Chip, Input, Label, Switch, TextArea, TextField, toast } from '@heroui/react';
 import { Building2, LockKeyhole, RotateCcw, Save, Search, Users } from 'lucide-react';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
-import { Notice, Panel, Segmented } from '@/components/app/primitives';
+import { LoadingIndicator, Notice, Panel, Segmented } from '@/components/app/primitives';
 import { errorMessage } from '@/lib/api';
 import { useCompany } from '@/lib/session';
-import type { GroupBy } from '@/lib/types';
+import type { GroupBy, MatchingMode } from '@/lib/types';
 import { useApi } from '@/lib/workspace-context';
 
 type SearchState = { terms: string[]; company_terms: string[]; personal_terms: string[] | null; locked: boolean; can_edit_company: boolean; can_edit_personal: boolean };
@@ -27,6 +27,19 @@ export function GeneralTab() {
   const [locked, setLocked] = useState(false);
   const [filterOn, setFilterOn] = useState(true);
   const [busy, setBusy] = useState('');
+  const [modeJob, setModeJob] = useState<{ status: string; error?: string } | null>(null);
+  const modeProcessing = modeJob?.status === 'queued' || modeJob?.status === 'processing';
+
+  useEffect(() => {
+    if (!modeProcessing) return;
+    const timer = window.setInterval(() => {
+      void api.get<{ status: string; error?: string } | null>('/index/status').then((job) => {
+        setModeJob(job);
+        if (job?.status === 'completed') { refresh(); toast.success('Pencocokan selesai diperbarui.'); }
+      }).catch((reason) => { setModeJob({ status: 'failed', error: errorMessage(reason) }); });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [api, modeProcessing, refresh]);
 
   useEffect(() => {
     void api.get<SearchState>('/search-default').then((value) => {
@@ -54,6 +67,15 @@ export function GeneralTab() {
         </div>
       </Panel>
 
+      <Panel title="Mode pencocokan otomatis" description="Berlaku saat upload dan proses ulang. Salah satu sisi pasangan harus termasuk company atau sales yang dipantau; sisi lainnya dicari dari seluruh data company.">
+        <Segmented<MatchingMode> label="Cocokkan berdasarkan" value={company?.matching_mode ?? 'company'} fullWidth isDisabled={!admin || !!busy || modeProcessing}
+          onChange={(matching_mode) => { void run('mode', async () => { await api.put('/company/settings', { matching_mode }); setModeJob(await api.post<{ status: string }>('/index/recompute')); }, 'Mode disimpan. Pencocokan dihitung ulang di latar belakang.'); }}
+          options={[{ id: 'company', label: 'Company (keyword)' }, { id: 'sales', label: 'Sales (watchlist)' }]} />
+        {(busy === 'mode' || modeProcessing) && <div className="mt-3"><LoadingIndicator message={modeJob?.status === 'queued' ? 'Menunggu antrean pencocokan…' : 'Memperbarui pencocokan sesuai mode yang dipilih…'} /></div>}
+        {modeJob?.status === 'failed' && <Notice status="danger">{modeJob.error || 'Pencocokan belum berhasil diperbarui.'}</Notice>}
+        <p className="mt-3 text-sm text-muted">{admin ? 'Mode Sales memerlukan minimal satu nomor di watchlist Stok Sales.' : 'Hanya super admin yang dapat mengubah mode pencocokan otomatis.'}</p>
+      </Panel>
+
       <Panel title={<span className="flex items-center gap-2"><Search className="size-5 text-accent" aria-hidden="true" />Kata kunci pencarian</span>}
         description="Pencocokan hanya memakai pesan yang mengandung salah satu kata atau frasa ini (misalnya nama kantor Anda). Satu kata/frasa per baris, atau pisahkan dengan koma. Maksimal 20.">
         {!state && <p className="text-base text-muted">Memuat…</p>}
@@ -69,7 +91,7 @@ export function GeneralTab() {
               <>
                 <TextField value={text} onChange={setText} fullWidth isInvalid={tooMany}>
                   <Label className="text-base font-bold">Kata kunci company</Label>
-                  <TextArea rows={5} className="text-base" placeholder={'XM Darmo\nXM Citraland'} />
+                  <TextArea rows={5} className="text-base" placeholder={'konig\nProperty Citraland'} />
                 </TextField>
                 <div className="flex flex-wrap gap-2">{terms.map((term) => <Chip key={term} variant="soft" color="accent" size="lg">{term}</Chip>)}</div>
                 {tooMany && <Notice status="danger">Maksimal 20 kata atau frasa.</Notice>}

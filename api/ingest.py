@@ -138,7 +138,8 @@ def _process_import(import_id: str) -> None:
                  counters["duplicate"], qdrant_count, import_id),
             )
             conn.commit()
-        match_count = recompute_matches(source='import', import_id=import_id, agent_name=job['agent_name'])
+        match_count = recompute_matches(source='import', import_id=import_id, agent_name=job['agent_name'],
+                                        matching_mode=job.get('matching_mode'))
         with connect() as conn:
             conn.execute("UPDATE xm.imports SET status='completed', finished_at=now() WHERE id=%s", (import_id,))
             conn.execute(

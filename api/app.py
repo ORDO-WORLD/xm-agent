@@ -49,7 +49,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="XM Auto Audit API", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="Property Auto Audit API", version="4.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:9004", "http://localhost:9004"],
@@ -166,9 +166,13 @@ def imports():
 
 
 @app.post("/imports", status_code=202)
-async def upload_import(file: UploadFile = File(...), agent_name: str | None = Form(default=None)):
+async def upload_import(file: UploadFile = File(...), agent_name: str | None = Form(default=None),
+                        matching_mode: str | None = Form(default=None)):
     if not file.filename or not file.filename.lower().endswith(".json"):
         raise HTTPException(400, "Gunakan file JSON")
+    from matching_scope import load_matching_scope
+    with connect() as conn:
+        mode = load_matching_scope(conn, workspace_id(), matching_mode).mode
     import_id = uuid.uuid4()
     destination = UPLOAD_DIR / workspace_id() / f"{import_id}.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -190,18 +194,34 @@ async def upload_import(file: UploadFile = File(...), agent_name: str | None = F
         raise HTTPException(400, f"Format JSON tidak dikenali: {exc}") from exc
     with connect() as conn:
         existing = conn.execute(
-            "SELECT id, status FROM xm.imports WHERE company_id=current_setting('xm.workspace_id') AND agent_name=%s AND file_sha256=%s",
+            "SELECT id, status, matching_mode FROM xm.imports WHERE company_id=current_setting('xm.workspace_id') AND agent_name=%s AND file_sha256=%s",
             (resolved_agent, digest.hexdigest()),
         ).fetchone()
         if existing:
             destination.unlink(missing_ok=True)
-            return {"id": existing["id"], "status": existing["status"], "duplicate": True}
+            # Do not silently ignore a new mode on an already imported file.
+            # Rebuild the existing data without creating duplicate messages or
+            # relabelling known pairs as new upload discoveries.
+            if existing['status'] == 'completed':
+                conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042026))")
+                current_mode = conn.execute('SELECT matching_mode FROM xm.app_preferences WHERE company_id=%s',
+                                            (workspace_id(),)).fetchone()['matching_mode']
+                if current_mode != mode:
+                    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042027))")
+                    conn.execute('UPDATE xm.app_preferences SET matching_mode=%s, updated_at=now() WHERE company_id=%s',
+                                 (mode, workspace_id()))
+                    conn.execute("""INSERT INTO xm.maintenance_jobs(id)
+                      SELECT %s WHERE NOT EXISTS (SELECT 1 FROM xm.maintenance_jobs
+                        WHERE company_id=current_setting('xm.workspace_id') AND status IN ('queued','processing'))""", (uuid.uuid4(),))
+                    conn.commit()
+                    return {"id": existing['id'], "status": existing['status'], "duplicate": True, "recomputing": True, "matching_mode": mode}
+            return {"id": existing["id"], "status": existing["status"], "duplicate": True, "matching_mode": existing['matching_mode']}
         conn.execute(
-            "INSERT INTO xm.imports(id, agent_name, file_name, file_path, file_sha256) VALUES (%s,%s,%s,%s,%s)",
-            (import_id, resolved_agent, file.filename, str(destination), digest.hexdigest()),
+            "INSERT INTO xm.imports(id, agent_name, file_name, file_path, file_sha256, matching_mode) VALUES (%s,%s,%s,%s,%s,%s)",
+            (import_id, resolved_agent, file.filename, str(destination), digest.hexdigest(), mode),
         )
         conn.commit()
-    return {"id": import_id, "status": "queued", "duplicate": False, "agent_name": resolved_agent}
+    return {"id": import_id, "status": "queued", "duplicate": False, "agent_name": resolved_agent, "matching_mode": mode}
 
 
 @app.get("/documents")

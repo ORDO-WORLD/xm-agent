@@ -78,16 +78,17 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   }, [api, direction, filters.temps, prefsReady, fromLink]);
 
   const groupBy: GroupBy = company?.listing_group_by ?? 'sender';
-  const search = (company?.effective_terms ?? []).join('\n');
+  const salesMode = company?.matching_mode === 'sales';
+  const search = salesMode ? '' : (company?.effective_terms ?? []).join('\n');
   const debouncedId = useDebounced(filters.publicId, 350);
   const debouncedPhones = useDebounced(filters.phones, 500);
   const useGroups = direction === 'property' && grouped;
   const base = useMemo<Base>(() => ({
     direction, search, statuses: filters.temps.join(','), stock_status: filters.stock.join(',') || 'ready',
-    public_id: debouncedId, phones: direction === 'property' ? debouncedPhones : '',
+    public_id: debouncedId, phones: direction === 'property' ? (debouncedPhones || (salesMode ? company?.tracked_phones.join(',') ?? '' : '')) : '',
     buyer_date_from: filters.buyerPeriod.from, buyer_date_to: filters.buyerPeriod.to,
     listing_date_from: filters.listingPeriod.from, listing_date_to: filters.listingPeriod.to,
-  }), [direction, search, filters.temps, filters.stock, debouncedId, debouncedPhones, filters.buyerPeriod, filters.listingPeriod]);
+  }), [direction, search, salesMode, company?.tracked_phones, filters.temps, filters.stock, debouncedId, debouncedPhones, filters.buyerPeriod, filters.listingPeriod]);
 
   // Every change of a filter goes through here, so the open detail view closes with it.
   const update = (patch: Partial<ListFilters>) => { setFilters((current) => ({ ...current, ...patch })); setMobileDetail(false); };
@@ -170,7 +171,7 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
             </div>
           </div>
         </details>
-        <p className="text-sm text-muted">Pencarian kata kunci: <strong className="text-foreground">{(company?.effective_terms ?? []).join(' · ') || 'semua pesan'}</strong>{company?.search_locked ? ' (dikunci oleh super admin)' : ''}. Ubah di <button type="button" className="font-semibold text-accent underline" onClick={() => navigate?.('pengaturan')}>Pengaturan</button>.</p>
+        <p className="text-sm text-muted">{salesMode ? <>Mode Sales — watchlist company: <strong className="text-foreground">{company?.tracked_phones.join(' · ') || 'belum ada nomor'}</strong>.</> : <>Mode Company — pencarian kata kunci: <strong className="text-foreground">{(company?.effective_terms ?? []).join(' · ') || 'semua pesan'}</strong>{company?.search_locked ? ' (dikunci oleh super admin)' : ''}.</>} Ubah di <button type="button" className="font-semibold text-accent underline" onClick={() => navigate?.('pengaturan')}>Pengaturan</button>.</p>
       </Panel>
 
       {/* Remounting on every new list resets the selection, paging and open groups without any syncing effects. */}
@@ -246,7 +247,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
         listing_date_from: base.listing_date_from, listing_date_to: base.listing_date_to });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url; link.download = 'XM-Matching-Report.pdf'; link.click();
+      link.href = url; link.download = 'Property-Matching-Report.pdf'; link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
       toast.success('PDF siap diunduh');
     } catch (reason) {
@@ -298,7 +299,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
     <>
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(380px,42%)_1fr]">
         {/* ------------------------------------------------------------ list */}
-        <section aria-label={`Daftar ${sourceLabel}`} className={cn('min-w-0 space-y-3', mobileDetail && 'hidden xl:block')}>
+        <section aria-label={`Daftar ${sourceLabel}`} aria-busy={useGroups ? groups.loading : flat.loading} className={cn('min-w-0 space-y-3', mobileDetail && 'hidden xl:block')}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-bold">{direction === 'buyer' ? 'Buyer' : 'Listing'}{!useGroups && flat.data ? <span className="ml-2 text-base font-normal text-muted">{number(flat.data.rows.length)}{flat.data.has_more ? '+' : ''} ditampilkan</span> : null}</h2>
             <div className="flex flex-wrap items-center gap-2">
@@ -319,9 +320,9 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
                 <SearchField.Group><SearchField.SearchIcon /><SearchField.Input className="h-12 text-base" placeholder={groupBy === 'phone' ? 'Cari nama sales atau nomor' : 'Cari nama pengirim'} /><SearchField.ClearButton /></SearchField.Group>
               </SearchField>
               <ErrorNotice message={groups.error} onRetry={groups.reload} />
-              {groups.loading && !groups.data && <LoadingRows rows={4} />}
-              {groups.data && groups.data.groups.length === 0 && <ListEmpty onReset={onReset} />}
-              {groups.data && groups.data.groups.length > 0 && (
+              {groups.loading && <LoadingRows rows={4} />}
+              {!groups.loading && groups.data && groups.data.groups.length === 0 && <ListEmpty onReset={onReset} />}
+              {!groups.loading && groups.data && groups.data.groups.length > 0 && (
                 <Accordion allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={setExpanded} className="w-full">
                   {groups.data.groups.map((item) => (
                     <Accordion.Item key={item.key || '__none'} id={item.key || '__none'}>
@@ -351,9 +352,9 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
           ) : (
             <>
               <ErrorNotice message={flat.error} onRetry={flat.reload} />
-              {flat.loading && !flat.data && <LoadingRows rows={5} />}
-              {flat.data && flat.data.rows.length === 0 && <ListEmpty onReset={onReset} />}
-              <div className={cn('space-y-3 transition-opacity', flat.loading && flat.data && 'opacity-60')}>{flat.data?.rows.map((row) => card(row))}</div>
+              {flat.loading && <LoadingRows rows={5} />}
+              {!flat.loading && flat.data && flat.data.rows.length === 0 && <ListEmpty onReset={onReset} />}
+              {!flat.loading && <div className="space-y-3">{flat.data?.rows.map((row) => card(row))}</div>}
               {flat.data && (offset > 0 || flat.data.has_more) && (
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-3">
                   <span className="text-base text-muted">Menampilkan {offset + 1}–{offset + flat.data.rows.length}</span>
@@ -368,7 +369,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
         </section>
 
         {/* ----------------------------------------------------- recommendations */}
-        <section aria-label={`Rekomendasi ${targetLabel}`} className={cn('min-w-0 xl:sticky xl:top-4', !mobileDetail && 'hidden xl:block')}>
+        <section aria-label={`Rekomendasi ${targetLabel}`} aria-busy={recs.loading} className={cn('min-w-0 xl:sticky xl:top-4', !mobileDetail && 'hidden xl:block')}>
           <div className="xm-card overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3">
               <div className="flex items-center gap-2">
@@ -384,9 +385,9 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
             </div>
             <div className="max-h-none space-y-3 bg-background p-3 sm:p-4 xl:max-h-[calc(100dvh-14rem)] xl:overflow-y-auto">
               {!active && <EmptyState animation="searching" title={`Pilih ${sourceLabel} di sebelah kiri`} description={`Hasil Hot, Warm, atau belum cocok untuk ${sourceLabel} itu akan muncul di sini.`} />}
-              {active && recs.loading && !recs.data && <LoadingRows rows={2} />}
+              {active && recs.loading && <LoadingRows rows={2} />}
               <ErrorNotice message={recs.error} onRetry={recs.reload} />
-              {group && (
+              {!recs.loading && group && (
                 <>
                   <div className="xm-card border-accent/30 bg-accent-soft/40 p-3.5">
                     <p className="text-sm font-semibold text-muted">Untuk {sourceLabel} ini</p>

@@ -128,16 +128,26 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
   );
 }
 
+export function LoadingIndicator({ message = 'Memuat hasil sesuai pilihan Anda…' }: { message?: string }) {
+  return (
+    <output aria-live="polite" className="flex items-center gap-3 rounded-2xl border border-accent/20 bg-accent-soft/40 px-4 py-2">
+      <LottiePlayer name="loading" className="w-12 shrink-0" />
+      <p className="text-base font-semibold text-accent">{message}</p>
+    </output>
+  );
+}
+
 export function LoadingRows({ rows = 4, className }: { rows?: number; className?: string }) {
   return (
-    <output aria-label="Memuat data" className={cn('block space-y-3', className)}>
+    <div aria-label="Memuat data" aria-busy="true" className={cn('block space-y-3', className)}>
+      <LoadingIndicator />
       {Array.from({ length: rows }, (_, index) => (
         <div key={index} className="xm-card flex gap-3 p-4">
           <Skeleton className="size-11 shrink-0 rounded-full" />
           <div className="flex-1 space-y-2.5"><Skeleton className="h-4 w-1/3 rounded-md" /><Skeleton className="h-3.5 w-5/6 rounded-md" /><Skeleton className="h-3.5 w-2/3 rounded-md" /></div>
         </div>
       ))}
-    </output>
+    </div>
   );
 }
 
@@ -199,8 +209,8 @@ export function PlainChip({ children, color = 'default' }: { children: ReactNode
 /* -------------------------------------------------------------- controls */
 
 /** One choice out of a few, shown as big buttons that fit a thumb. */
-export function Segmented<T extends string>({ value, onChange, options, label, fullWidth }: {
-  value: T; onChange: (value: T) => void; options: { id: T; label: ReactNode }[]; label: string; fullWidth?: boolean;
+export function Segmented<T extends string>({ value, onChange, options, label, fullWidth, isDisabled = false }: {
+  value: T; onChange: (value: T) => void; options: { id: T; label: ReactNode }[]; label: string; fullWidth?: boolean; isDisabled?: boolean;
 }) {
   return (
     <ToggleButtonGroup
@@ -210,6 +220,7 @@ export function Segmented<T extends string>({ value, onChange, options, label, f
       selectedKeys={new Set([value])}
       onSelectionChange={(keys) => { const next = [...keys][0]; if (next) onChange(next as T); }}
       fullWidth={fullWidth}
+      isDisabled={isDisabled}
       className="max-w-full"
     >
       {options.map((option, index) => (

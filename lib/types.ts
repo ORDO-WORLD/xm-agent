@@ -4,6 +4,7 @@ export type Direction = 'buyer' | 'property';
 export type Temperature = 'hot' | 'warm';
 export type MatchFilter = 'hot' | 'warm' | 'unmatched';
 export type GroupBy = 'sender' | 'phone';
+export type MatchingMode = 'company' | 'sales';
 export type ImportStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
 export type User = {
@@ -29,6 +30,7 @@ export type Permissions = {
 export type CompanySettings = {
   company_name: string | null;
   listing_group_by: GroupBy;
+  matching_mode: MatchingMode;
   search_locked: boolean;
   search_terms: string[];
   personal_terms: string[] | null;
@@ -115,6 +117,7 @@ export type ImportRow = {
   id: string;
   agent_name: string;
   file_name: string;
+  matching_mode?: MatchingMode | null;
   status: ImportStatus;
   total_messages: number;
   processed_messages: number;

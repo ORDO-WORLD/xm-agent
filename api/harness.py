@@ -120,7 +120,7 @@ class ServerTestCase(unittest.TestCase):
                 conn.execute('DELETE FROM xm.users WHERE workspace_id=%s', (scope,))
             conn.commit()
 
-    def upload(self, owner, texts=None, agent='Private Agent', day=1, messages=None):
+    def upload(self, owner, texts=None, agent='Private Agent', day=1, messages=None, matching_mode=None, status=202):
         """Queue a chat export. ``messages`` is a list of (text, author) or (text, author, iso_timestamp)."""
         if messages is None:
             texts = texts or ['Buyer request rumah Surabaya Barat LT 100 Budget 2 M',
@@ -133,11 +133,14 @@ class ServerTestCase(unittest.TestCase):
             rows.append([stamp, text, author])
         data = json.dumps({'chats': {'room': {'name': 'Private chat', 'messages': rows}}})
         boundary = 'xm-isolation-test-boundary'
+        mode_field = (f'--{boundary}\r\nContent-Disposition: form-data; name="matching_mode"\r\n\r\n{matching_mode}\r\n'
+                      if matching_mode is not None else '')
         raw = (f'--{boundary}\r\nContent-Disposition: form-data; name="agent_name"\r\n\r\n{agent}\r\n'
+               f'{mode_field}'
                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="cleaned.json"\r\nContent-Type: application/json\r\n\r\n'
                f'{data}\r\n--{boundary}--\r\n').encode()
         return self.call(self.admin, '/imports', 'POST', owner=owner, raw=raw,
-                         content_type='multipart/form-data; boundary=' + boundary, status=202)
+                         content_type='multipart/form-data; boundary=' + boundary, status=status)
 
     def process(self, job):
         import ingest

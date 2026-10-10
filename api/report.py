@@ -133,7 +133,7 @@ def build_report(pairs, direction, section=None, cover=None, first_page=1):
     the header names that sales and the footer continues the page numbers of the whole file."""
     output = BytesIO()
     pdf = canvas.Canvas(output, pagesize=A4)
-    pdf.setTitle('XM Property Matchmaker')
+    pdf.setTitle('Property Matchmaker')
     months = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']
     now = datetime.now(ZoneInfo('Asia/Jakarta'))
     generated = f'{now.day:02d} {months[now.month-1]} {now.year}'
@@ -193,7 +193,7 @@ def build_report(pairs, direction, section=None, cover=None, first_page=1):
             pdf.drawString(MARGIN, 30, 'Belum cocok')
         pdf.setFillColor(HexColor('#53617b'))
         pdf.setFont('Helvetica', 9)
-        pdf.drawRightString(right, 30, f'XM Property Matchmaker | {index if section is None else first_page + index - 1}')
+        pdf.drawRightString(right, 30, f'Property Matchmaker | {index if section is None else first_page + index - 1}')
         pdf.showPage()
     pdf.save()
     return output.getvalue()

@@ -1,4 +1,4 @@
-# XM Auto Audit — v4.0
+# Property Auto Audit — v4.0
 
 Local property matchmaking workspace for Property. It imports WhatsApp `cleaned.json` files per agent, parses each message with deterministic Python rules, stores structured records in PostgreSQL schema `xm`, indexes searchable content in Qdrant collection `xm_rag`, and exposes the results to Hermes Agent.
 
@@ -31,6 +31,9 @@ Panduan lengkap, tabel peran, dan langkah upgrade: [docs/UPGRADE_V4.0.md](docs/U
 
 ## Matching workspace update
 
+- Upload menawarkan mode **Company** (keyword milik company, tanpa membedakan huruf besar/kecil, termasuk tanda tangan pesan) atau **Sales** (nomor kontak utama/alternatif dalam watchlist company). Salah satu sisi pasangan harus termasuk company/sales yang dipantau; sisi lain dicari dari seluruh arsip workspace tersebut. Mode Sales ditolak bila watchlist company kosong, dan tidak memakai nama pengunggah/pengirim sebagai nomor pemilik listing.
+- Mode upload tersimpan pada riwayat; mode terakhir yang berhasil diproses menjadi default company untuk proses ulang berikutnya. Company baru mulai pada mode Company tanpa saringan keyword. Aturan keyword/watchlist dibaca kembali saat worker mencocokkan, sehingga aturan yang sudah berubah setelah upload tetap berlaku. File duplikat tidak menambah pesan; bila mode diganti, arsip yang ada diproses ulang sebagai maintenance, tanpa menandai pasangan lama sebagai penemuan upload baru.
+- Pengaturan → Umum juga dapat mengganti mode otomatis dan menghitung ulang hasil. Pergantian filter, arah, sales, serta proses ulang menampilkan animasi loading dan skeleton/status proses; animasi mengikuti preferensi pengurangan gerak perangkat.
 - After login, choose Buyer → Property or Property → Buyer with all dates selected by default; optional Jakarta calendar presets include this month, this week (Monday–Sunday), last month, and a manual range before opening the matching workspace.
 - Both search directions use the company's keywords (company baru mulai tanpa saringan). Super admin dapat memasukkan sampai 20 frasa dipisah baris atau koma; sumber yang cocok dengan salah satu frasa dipakai. Super admin dapat **mengunci** kata kunci; bila tidak dikunci, setiap anggota boleh memakai daftarnya sendiri.
 - Select one source card to open its recommendations. On mobile, the source list and recommendations appear as separate views, with a back button to return to the list.

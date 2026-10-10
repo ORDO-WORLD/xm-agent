@@ -11,6 +11,10 @@ class ProcessingPipelineRegression(unittest.TestCase):
   job=uuid.uuid4();tag='pipeline-'+str(job)
   with connect_test_db() as c:
    c.execute(Path(__file__).with_name('schema.sql').read_text())
+   # This pipeline fixture tests unfiltered matching. The legacy workspace's
+   # seeded office keyword is now enforced by automatic matching as well.
+   preferences=c.execute("SELECT search_terms,matching_mode FROM xm.app_preferences WHERE company_id=current_setting('xm.workspace_id')").fetchone()
+   c.execute("UPDATE xm.app_preferences SET search_terms='{}',matching_mode='company' WHERE company_id=current_setting('xm.workspace_id')")
    c.execute("INSERT INTO xm.imports(id,agent_name,file_name,file_path,file_sha256) VALUES(%s,%s,'test','test',%s)",(job,tag,tag))
    for i,text in enumerate(['Buyer request rumah Surabaya Barat LT 100 Budget 2 M']*2 + ['Dijual rumah Surabaya Barat LT 100 Harga 1,8 M']*2 + ['Dijual gudang Surabaya Barat LT 100 Harga 1,8 M']):
     raw=uuid.uuid4()
@@ -30,4 +34,5 @@ class ProcessingPipelineRegression(unittest.TestCase):
   finally:
    with connect_test_db() as c:
     c.execute('DELETE FROM xm.raw_messages WHERE import_id=%s',(job,));c.execute('DELETE FROM xm.imports WHERE id=%s',(job,))
+    c.execute("UPDATE xm.app_preferences SET search_terms=%s,matching_mode=%s WHERE company_id=current_setting('xm.workspace_id')",(preferences['search_terms'],preferences['matching_mode']))
     c.execute('DELETE FROM xm.workspace_cache_state');c.commit()

@@ -17,9 +17,9 @@ router = APIRouter()
 
 def company_row(conn):
     return conn.execute(
-        """SELECT company_name, search_terms, search_locked, listing_group_by
+        """SELECT company_name, search_terms, search_locked, listing_group_by, matching_mode
            FROM xm.app_preferences WHERE company_id = current_setting('xm.workspace_id')""").fetchone() or {
-        'company_name': None, 'search_terms': [], 'search_locked': False, 'listing_group_by': 'sender'}
+        'company_name': None, 'search_terms': [], 'search_locked': False, 'listing_group_by': 'sender', 'matching_mode': 'company'}
 
 
 def personal_terms(conn, user_key):
@@ -44,6 +44,7 @@ def get_company_settings(request: Request):
         phones = tracked_phones(conn, workspace_id())
     return {
         'company_name': company['company_name'], 'listing_group_by': company['listing_group_by'],
+        'matching_mode': company['matching_mode'],
         'search_locked': company['search_locked'], 'search_terms': company['search_terms'],
         'personal_terms': mine, 'effective_terms': effective_terms(user['role'], company, mine),
         'tracked_phones': phones, 'role': user['role'], 'permissions': permissions(user['role'], company['search_locked']),
@@ -54,6 +55,7 @@ class CompanyUpdate(BaseModel):
     company_name: str | None = Field(default=None, min_length=1, max_length=120)
     listing_group_by: Literal['sender', 'phone'] | None = None
     search_locked: bool | None = None
+    matching_mode: Literal['company', 'sales'] | None = None
 
 
 @router.put('/company/settings')
@@ -67,6 +69,11 @@ def put_company_settings(payload: CompanyUpdate, request: Request):
         # Column names come from the fixed model above, never from the client.
         sets = ', '.join(f'{column} = %s' for column in changes)
         with connect() as conn:
+            if 'matching_mode' in changes:
+                conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042026))")
+            if changes.get('matching_mode') == 'sales':
+                from matching_scope import load_matching_scope
+                load_matching_scope(conn, workspace_id(), 'sales')
             conn.execute(f"UPDATE xm.app_preferences SET {sets}, updated_at = now() WHERE company_id = current_setting('xm.workspace_id')",
                          tuple(changes.values()))
             conn.commit()

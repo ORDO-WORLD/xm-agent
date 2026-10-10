@@ -9,6 +9,7 @@ from matching_rules import assess_pair, prepare_document
 from workspace_cache import refresh_workspace_cache
 from matchlog import log_matches
 from location_index import load_index
+from matching_scope import load_matching_scope
 
 
 def _near_duplicate(left_tokens: set[str], right_tokens: set[str]) -> bool:
@@ -18,7 +19,8 @@ def _near_duplicate(left_tokens: set[str], right_tokens: set[str]) -> bool:
 
 
 def recompute_matches(company_id: str | None = None, limit_per_request: int | None = None, *,
-                      source: str = 'recompute', import_id=None, agent_name: str | None = None) -> int:
+                      source: str = 'recompute', import_id=None, agent_name: str | None = None,
+                      matching_mode: str | None = None) -> int:
     """Rebuild every match of a workspace.
 
     ``source='import'`` marks a rebuild caused by new chat data: pairs that were
@@ -27,12 +29,13 @@ def recompute_matches(company_id: str | None = None, limit_per_request: int | No
     """
     company_id = company_id or workspace_id()
     with workspace_scope(company_id):
-        return _recompute_matches(company_id, limit_per_request, source, import_id, agent_name)
+        return _recompute_matches(company_id, limit_per_request, source, import_id, agent_name, matching_mode)
 
 
-def _recompute_matches(company_id, limit_per_request, source='recompute', import_id=None, agent_name=None):
+def _recompute_matches(company_id, limit_per_request, source='recompute', import_id=None, agent_name=None, matching_mode=None):
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042026))")
+        scope = load_matching_scope(conn, company_id, matching_mode)
         settings = conn.execute(
             "SELECT * FROM xm.match_settings WHERE company_id = %s", (company_id,)
         ).fetchone()
@@ -56,9 +59,11 @@ def _recompute_matches(company_id, limit_per_request, source='recompute', import
         requests = list({r['raw_text']:r for r in requests}.values())
         for row in requests + listings:
             prepare_document(row,location_index)
+        monitored_ids = {str(row['id']) for row in requests + listings if scope.includes(row)}
         listings_by_id = {str(row['id']):row for row in listings}
         listing_tokens = {str(row["id"]): set(row["normalized_text"].split()) for row in listings}
         listings_by_category = {}
+        monitored_by_category = {}
         listings_by_category_location = {}
         listings_by_cluster = {}
         for listing in listings:
@@ -67,6 +72,8 @@ def _recompute_matches(company_id, limit_per_request, source='recompute', import
                     listings_by_cluster.setdefault((category, cluster), []).append(listing)
             for category in listing["categories"] or []:
                 listings_by_category.setdefault(category, []).append(listing)
+                if str(listing['id']) in monitored_ids:
+                    monitored_by_category.setdefault(category, []).append(listing)
                 for location in listing["locations"] or []:
                     listings_by_category_location.setdefault((category, location), []).append(listing)
         conn.execute("DELETE FROM xm.matches WHERE company_id=%s", (company_id,))
@@ -94,6 +101,13 @@ def _recompute_matches(company_id, limit_per_request, source='recompute', import
             # Structured retrieval guarantees that exact-location candidates
             # are considered even when they are outside Qdrant's semantic top-K.
             for category in request_categories:
+                # Company/watchlist evidence must not disappear behind semantic
+                # top-K or an unindexed location. Preserve legacy retrieval for
+                # companies that explicitly use the unfiltered default.
+                if scope.mode == 'sales' or scope.terms:
+                    scoped_candidates = (listings_by_category if str(request['id']) in monitored_ids else monitored_by_category)
+                    for listing in scoped_candidates.get(category, []):
+                        candidate_rows.setdefault(str(listing['id']), (listing, None))
                 structured_candidates = {}
                 for location in request["locations"] or []:
                     for listing in listings_by_category_location.get((category, location), []):
@@ -109,6 +123,8 @@ def _recompute_matches(company_id, limit_per_request, source='recompute', import
                         for listing in listings_by_cluster.get((category, target), []):
                             candidate_rows.setdefault(str(listing['id']), (listing, None))
             for listing, qdrant_semantic in candidate_rows.values():
+                if str(request['id']) not in monitored_ids and str(listing['id']) not in monitored_ids:
+                    continue
                 # Forwarded request posts can appear in multiple WhatsApp
                 # groups. Never recommend the same text back as a property.
                 if _near_duplicate(listing_tokens[str(listing["id"])], request_tokens):
@@ -133,13 +149,16 @@ def _recompute_matches(company_id, limit_per_request, source='recompute', import
         if pending:
             with conn.cursor() as cur: cur.executemany(insert_sql,pending)
         refresh_workspace_cache(conn,company_id)
+        # The mode applied by this upload also governs later maintenance runs.
+        conn.execute('UPDATE xm.app_preferences SET matching_mode=%s, updated_at=now() WHERE company_id=%s',
+                     (scope.mode, company_id))
         found = log_matches(conn, company_id, source, import_id, agent_name)
         if source == 'import':
             import stock
             stock.snapshot_stock(conn, company_id, 'import', import_id=import_id, agent_name=agent_name)
         conn.execute(
             "INSERT INTO xm.audit_events(event_type, entity_type, details) VALUES ('matching_completed','match',%s::jsonb)",
-            (json.dumps({"matches": inserted, "requests": len(requests), "listings": len(listings), "new_matches": found['new'], "source": source}),),
+            (json.dumps({"matches": inserted, "requests": len(requests), "listings": len(listings), "new_matches": found['new'], "source": source, "matching_mode": scope.mode}),),
         )
         conn.commit()
         return inserted

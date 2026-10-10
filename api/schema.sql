@@ -272,6 +272,11 @@ END $$;
 ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS company_name text;
 ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS search_locked boolean NOT NULL DEFAULT false;
 ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS listing_group_by text NOT NULL DEFAULT 'sender';
+ALTER TABLE xm.app_preferences ADD COLUMN IF NOT EXISTS matching_mode text NOT NULL DEFAULT 'company'
+ CHECK (matching_mode IN ('company','sales'));
+-- Null on historical imports means use the current company mode.
+ALTER TABLE xm.imports ADD COLUMN IF NOT EXISTS matching_mode text
+ CHECK (matching_mode IN ('company','sales'));
 DO $$ BEGIN
  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='xm.app_preferences'::regclass AND conname='app_preferences_group_by_check') THEN
   ALTER TABLE xm.app_preferences ADD CONSTRAINT app_preferences_group_by_check CHECK (listing_group_by IN ('sender','phone'));

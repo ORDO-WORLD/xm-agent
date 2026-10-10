@@ -16,4 +16,4 @@ def search_filter(value):
     if not terms:
         return '', []
     patterns = ['%' + term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%' for term in terms]
-    return " AND (d.normalized_text ILIKE ANY(%s) OR coalesce(d.contact_name,'') ILIKE ANY(%s))", [patterns, patterns]
+    return " AND (r.raw_text ILIKE ANY(%s) OR d.normalized_text ILIKE ANY(%s) OR coalesce(d.contact_name,'') ILIKE ANY(%s))", [patterns, patterns, patterns]

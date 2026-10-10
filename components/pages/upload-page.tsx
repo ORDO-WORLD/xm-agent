@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import { Button, Chip, Input, Label, ProgressBar, TextField } from '@heroui/react';
 import { ArrowRight, CheckCircle2, FileJson, History, TriangleAlert, UploadCloud } from 'lucide-react';
-import { EmptyState, ErrorNotice, Notice, PageHeader, Panel } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, Notice, PageHeader, Panel, Segmented } from '@/components/app/primitives';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
 import { BorderBeam } from '@/components/magicui/border-beam';
 import { Confetti, type ConfettiRef } from '@/components/magicui/confetti';
@@ -13,7 +13,7 @@ import { dateTime, number } from '@/lib/format';
 import type { Navigate } from '@/lib/router';
 import { useCompany } from '@/lib/session';
 import { useData } from '@/lib/use-data';
-import type { ImportRow } from '@/lib/types';
+import type { ImportRow, MatchingMode } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/lib/workspace-context';
 
@@ -33,7 +33,10 @@ function steps(item: ImportRow) {
 
 export default function UploadPage({ navigate }: { navigate?: Navigate }) {
   const api = useApi();
-  const { refresh } = useCompany();
+  const { company, refresh } = useCompany();
+  const [selectedMode, setSelectedMode] = useState<MatchingMode | null>(null);
+  const matchingMode = selectedMode ?? company?.matching_mode ?? 'company';
+  const noWatchlist = matchingMode === 'sales' && !company?.tracked_phones.length;
   const input = useRef<HTMLInputElement>(null);
   const confetti = useRef<ConfettiRef>(null);
   const [agent, setAgent] = useState('');
@@ -88,13 +91,15 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
       const form = new FormData();
       form.append('file', file);
       form.append('agent_name', agent.trim());
-      const result = await api.form<{ duplicate?: boolean; agent_name?: string }>('/imports', form);
-      setNotice(result.duplicate ? 'File ini sudah pernah diunggah dan diproses, jadi tidak ditambahkan lagi.' : `Data ${result.agent_name ?? agent} masuk antrean dan mulai diproses.`);
+      form.append('matching_mode', matchingMode);
+      const result = await api.form<{ duplicate?: boolean; recomputing?: boolean; agent_name?: string }>('/imports', form);
+      setNotice(result.recomputing ? 'File sudah pernah diproses. Mode baru diterapkan dan pencocokan dihitung ulang di latar belakang.' : result.duplicate ? 'File ini sudah pernah diunggah dan diproses, jadi tidak ditambahkan lagi.' : `Data ${result.agent_name ?? agent} masuk antrean dan mulai diproses.`);
+      if (result.recomputing) refresh();
       setFile(null);
       if (input.current) input.current.value = '';
       reload();
     } catch (reason) { setError(errorMessage(reason, 'Upload belum berhasil. Periksa file lalu coba lagi.')); } finally { setBusy(false); }
-  }, [api, file, agent, reload]);
+  }, [api, file, agent, matchingMode, reload, refresh]);
 
   const running = imports.data?.filter((item) => item.status === 'queued' || item.status === 'processing') ?? [];
   const history = imports.data ?? [];
@@ -149,12 +154,23 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
             </div>
           </div>
           <div className="space-y-4">
+            <Segmented<MatchingMode> label="Cocokkan berdasarkan" value={matchingMode} onChange={setSelectedMode} fullWidth isDisabled={busy}
+              options={[{ id: 'company', label: 'Company' }, { id: 'sales', label: 'Sales (watchlist)' }]} />
+            <p className="text-sm text-muted">Mode terakhir yang selesai diproses menjadi default pencocokan company.</p>
+            {matchingMode === 'company' ? (
+              <p className="text-base leading-relaxed text-muted">Mencari pasangan buyer dan listing bila salah satu pesan mengandung keyword company: <strong className="text-foreground">{company?.search_terms.join(' · ') || 'semua pesan (keyword belum diatur)'}</strong>{company?.search_locked ? ' (dikunci oleh company)' : ''}. Nama company pada tanda tangan pesan juga diperiksa.</p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-base leading-relaxed text-muted">Mencari pasangan untuk nomor sales dalam watchlist company, termasuk nomor alternatif pada kontak pesan. Nomor pengunggah atau pengirim tidak dipakai sebagai pemilik listing.</p>
+                {noWatchlist ? <Notice status="warning">Watchlist company kosong. Tambahkan nomor melalui <button type="button" className="font-semibold underline" onClick={() => navigate?.('stok')}>Stok Sales</button> sebelum mengunggah dalam mode Sales.</Notice> : <p className="break-words text-sm text-muted">Nomor dipantau: {company?.tracked_phones.join(' · ')}</p>}
+              </div>
+            )}
             <TextField value={agent} onChange={setAgent} fullWidth>
               <Label className="text-base font-bold">Nama sales pemilik chat</Label>
               <Input className="h-12 text-base" placeholder="mis. Caesar" maxLength={60} />
             </TextField>
             <p className="text-base leading-relaxed text-muted">Nama ini tercatat di riwayat dan di setiap match yang ditemukan, supaya Anda tahu dari upload siapa pasangan itu berasal.</p>
-            <ShimmerButton onClick={() => void upload()} disabled={!file || !agent.trim() || busy} background="oklch(0.48 0.235 265)" borderRadius="16px" shimmerColor="#a5f3fc"
+            <ShimmerButton onClick={() => void upload()} disabled={!file || !agent.trim() || busy || !company || noWatchlist} background="oklch(0.48 0.235 265)" borderRadius="16px" shimmerColor="#a5f3fc"
               className="h-14 w-full text-lg font-semibold disabled:cursor-not-allowed disabled:opacity-50">
               <UploadCloud className="mr-2 size-5" aria-hidden="true" />{busy ? 'Mengunggah…' : 'Unggah & proses'}
             </ShimmerButton>
@@ -194,7 +210,7 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="break-all text-base font-bold">{item.file_name}</p>
-                  <p className="text-sm text-muted">{item.agent_name} · {dateTime(item.created_at)}</p>
+                  <p className="text-sm text-muted">{item.agent_name} · {dateTime(item.created_at)}{item.matching_mode ? ` · Mode ${item.matching_mode === 'company' ? 'Company' : 'Sales'}` : ''}</p>
                 </div>
                 <Chip color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'danger' : 'warning'} variant="soft" size="md">{statusLabel[item.status] ?? item.status}</Chip>
               </div>

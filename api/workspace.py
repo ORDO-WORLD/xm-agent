@@ -116,7 +116,7 @@ def resolve_search(conn, request, search):
     user = current_user(request)
     if user and user['role'] == 'user':
         company = company_row(conn)
-        if company['search_locked']:
+        if company['search_locked'] and company['matching_mode'] == 'company':
             return '\n'.join(company['search_terms'])
     return search
 

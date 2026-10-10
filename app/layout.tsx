@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'XM Auto Audit · Property Matchmaker',
+  title: 'Property Auto Audit · Property Matchmaker',
   description: 'Audit percakapan WhatsApp dan pencocokan otomatis buyer dengan listing property.',
 };
 

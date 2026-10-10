@@ -5,7 +5,7 @@ import { Avatar, Button, Label, ListBox, Select, toast, useOverlayState } from '
 import { Boxes, ClipboardList, Download, Eye, History, Pencil, PhoneCall, Plus, Tag, UploadCloud } from 'lucide-react';
 import { BarsChart, Sparkline } from '@/components/charts/charts';
 import { colors } from '@/components/charts/chart-setup';
-import { EmptyState, ErrorNotice, IconBadge, LoadingRows, PageHeader, Panel, StatTile } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, IconBadge, LoadingIndicator, LoadingRows, PageHeader, Panel, StatTile } from '@/components/app/primitives';
 import { SalesListingsModal } from '@/components/app/sales-listings-modal';
 import { TrackedEditor } from '@/components/app/tracked-editor';
 import { PeriodPicker, type Period } from '@/components/app/period-picker';
@@ -145,7 +145,8 @@ export default function StockPage(_props: { navigate?: Navigate }) {
           </div>
           <ErrorNotice message={log.error} onRetry={log.reload} />
           {log.loading && !log.data && <LoadingRows rows={3} />}
-          {log.data && log.data.rows.length === 0 && <EmptyState compact title="Belum ada catatan pada filter ini" />}
+          {log.loading && log.data && <LoadingIndicator />}
+          {!log.loading && log.data && log.data.rows.length === 0 && <EmptyState compact title="Belum ada catatan pada filter ini" />}
           <ul className={cn('divide-y divide-separator rounded-2xl border border-border bg-surface transition-opacity', log.loading && log.data && 'opacity-60')}>
             {log.data?.rows.map((row) => <LogRow key={row.id} row={row} name={salesName({ label: row.label, contact_name: tracked.find((item) => item.phone === row.phone)?.contact_name ?? null, phone: row.phone })} />)}
           </ul>
