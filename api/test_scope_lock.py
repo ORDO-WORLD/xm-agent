@@ -1,5 +1,7 @@
 """Company scope is mandatory on manual reads, direct exports and cached dashboards."""
 import unittest
+from contextlib import contextmanager
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from harness import ServerTestCase
@@ -120,6 +122,51 @@ class CompanyLockTests(ServerTestCase):
         self.assertEqual(overview['status']['listing']['sold'], 1)
         self.assertEqual(overview['status']['listing']['ready'], 0)
         self.assertEqual(overview['latest_data_date'], '2026-09-04')
+
+    def test_status_summaries_calculate_company_ownership_once(self):
+        from db import connect
+
+        self.lock_company()
+        plans = {}
+
+        @contextmanager
+        def observed_connection(endpoint):
+            with connect() as conn:
+                class ObservedConnection:
+                    def __getattr__(self, name):
+                        return getattr(conn, name)
+
+                    def execute(self, sql, params=None, *args, **kwargs):
+                        normalized = ' '.join(str(sql).split())
+                        if 'SELECT e.document_type,e.status,count(*) AS n FROM xm.entities e' in normalized:
+                            # Explain the endpoint's actual statement and
+                            # parameters, so this check cannot drift from it.
+                            explained = conn.execute('EXPLAIN (ANALYZE, FORMAT JSON) ' + sql, params).fetchone()
+                            plans[endpoint] = explained['QUERY PLAN'][0]['Plan']
+                        return conn.execute(sql, params, *args, **kwargs)
+
+                yield ObservedConnection()
+
+        with patch('entity_routes.connect', lambda: observed_connection('summary')), \
+                patch('dashboard.connect', lambda: observed_connection('dashboard')):
+            summary = self.call(self.staff, '/entities/summary')
+            overview = self.overview()
+        self.assertEqual((sum(summary['buyer'].values()), sum(summary['listing'].values())), (1, 1))
+        self.assertEqual((overview['status']['buyer']['ready'], overview['status']['listing']['ready']), (1, 1))
+        self.assertEqual(set(plans), {'summary', 'dashboard'})
+
+        def nodes(plan):
+            yield plan
+            for child in plan.get('Plans', []):
+                yield from nodes(child)
+
+        for endpoint, plan in plans.items():
+            with self.subTest(endpoint=endpoint):
+                ownership = [node for node in nodes(plan) if node.get('Subplan Name') == 'CTE owned_entities']
+                self.assertEqual(len(ownership), 1, f'{endpoint} has no single ownership calculation')
+                self.assertEqual(ownership[0]['Actual Loops'], 1)
+                self.assertEqual(ownership[0]['Actual Rows'], 2)
+                self.assertTrue(any(node.get('Relation Name') == 'documents' for node in nodes(ownership[0])))
 
     def test_dashboard_mode_and_watchlist_changes_invalidate_cached_metrics_immediately(self):
         self.assert_dashboard(2, 2, 4)

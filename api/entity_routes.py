@@ -44,10 +44,16 @@ def summary():
     with connect() as conn:
         scope_sql, scope_params = document_scope_filter(conn)
         rows = conn.execute(
-            """SELECT e.document_type,e.status,count(*) AS n FROM xm.entities e
-               WHERE e.company_id=current_setting('xm.workspace_id') AND e.entity_id IN (
-                 SELECT d.entity_id FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
-                 WHERE d.company_id=e.company_id AND d.active """ + scope_sql + ') GROUP BY 1,2', scope_params).fetchall()
+            # Keep the expensive keyword/watchlist lookup independent of the
+            # number of entities whose status is being counted.
+            """WITH owned_entities AS MATERIALIZED (
+                 SELECT DISTINCT d.entity_id FROM xm.documents d
+                 JOIN xm.raw_messages r ON r.id=d.raw_message_id
+                 WHERE d.company_id=current_setting('xm.workspace_id') AND d.active """ + scope_sql + ''')
+               SELECT e.document_type,e.status,count(*) AS n FROM xm.entities e
+               WHERE e.company_id=current_setting('xm.workspace_id')
+                 AND e.entity_id IN (SELECT entity_id FROM owned_entities)
+               GROUP BY 1,2''', scope_params).fetchall()
     out = {'buyer': dict.fromkeys(STATUSES, 0), 'listing': dict.fromkeys(STATUSES, 0)}
     for row in rows:
         out['buyer' if row['document_type'] == 'buyer_request' else 'listing'][row['status']] = row['n']

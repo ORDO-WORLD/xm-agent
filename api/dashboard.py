@@ -306,9 +306,15 @@ def compute_overview(period, date_from, date_to):
                  AND e.status <> 'deleted' AND r.sent_at >= %s AND r.sent_at < %s''' + scope_sql + '''
                ORDER BY d.entity_id, r.sent_at DESC''', [low, high, *scope_params]).fetchall()
         status_rows = conn.execute(
-            '''SELECT e.document_type,e.status,count(*) AS n FROM xm.entities e WHERE e.company_id=%s
-               AND e.entity_id IN (SELECT d.entity_id FROM xm.documents d JOIN xm.raw_messages r ON r.id=d.raw_message_id
-                 WHERE d.company_id=e.company_id AND d.active ''' + scope_sql + ') GROUP BY 1,2', [ws,*scope_params]).fetchall()
+            # Calculate ownership once; a correlated IN can rescan the chat
+            # archive for every entity when the company has many records.
+            '''WITH owned_entities AS MATERIALIZED (
+                 SELECT DISTINCT d.entity_id FROM xm.documents d
+                 JOIN xm.raw_messages r ON r.id=d.raw_message_id
+                 WHERE d.company_id=current_setting('xm.workspace_id') AND d.active ''' + scope_sql + ''')
+               SELECT e.document_type,e.status,count(*) AS n FROM xm.entities e
+               WHERE e.company_id=%s AND e.entity_id IN (SELECT entity_id FROM owned_entities)
+               GROUP BY 1,2''', [*scope_params,ws]).fetchall()
         match_daily = _match_counts(conn, start, end)
         match_prev = _match_counts(conn, info['prev_start'], info['prev_end'])
         pref = conn.execute('SELECT listing_group_by FROM xm.app_preferences WHERE company_id = %s', (ws,)).fetchone()
