@@ -85,8 +85,6 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
         </div>
       </BlurFade>
 
-      <p className="text-sm leading-relaxed text-muted">{company?.matching_mode === 'sales' ? `Ringkasan mengikuti nomor sales dalam watchlist perusahaan: ${company.tracked_phones.join(' · ') || 'belum ada nomor'}.` : company?.search_terms.length ? `Ringkasan mengikuti keyword perusahaan: ${company.search_terms.join(' · ')}.` : 'Ringkasan menampilkan data perusahaan ini. Keyword perusahaan belum diatur.'}</p>
-
       <section aria-label="Pilih periode" className="space-y-2">
         <div className="flex items-center gap-2 text-base font-bold"><CalendarRange className="size-5 text-accent" aria-hidden="true" />Periode yang dilihat</div>
         <PeriodPicker
