@@ -494,3 +494,8 @@ CREATE INDEX IF NOT EXISTS activity_log_recent_idx ON xm.activity_log(last_at DE
 CREATE INDEX IF NOT EXISTS activity_log_company_idx ON xm.activity_log(company_id, last_at DESC);
 CREATE INDEX IF NOT EXISTS activity_log_actor_idx ON xm.activity_log(actor_email, last_at DESC);
 CREATE INDEX IF NOT EXISTS activity_log_merge_idx ON xm.activity_log(action, actor_email, last_at DESC);
+
+-- Sign-in through AutoAudit: the stable identity of an AutoAudit account (NULL = an account made here),
+-- and the ticket a session is re-checked with on every request (NULL = a password session).
+ALTER TABLE xm.users ADD COLUMN IF NOT EXISTS autoaudit_key text UNIQUE;
+ALTER TABLE xm.sessions ADD COLUMN IF NOT EXISTS sso_ticket text;

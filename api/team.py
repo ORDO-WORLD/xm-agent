@@ -58,6 +58,9 @@ def add_member(payload: NewMember, request: Request):
         raise HTTPException(403, 'Hanya administrator platform yang dapat menambah super admin company.')
     if not payload.display_name.strip():
         raise HTTPException(400, 'Nama wajib diisi')
+    if workspace_id().startswith('aa-'):
+        # A password account could not be checked against the company's module in AutoAudit.
+        raise HTTPException(403, 'Akun company ini dikelola dari AutoAudit.')
     try:
         with connect() as conn:
             user = conn.execute(

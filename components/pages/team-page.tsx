@@ -7,7 +7,7 @@ import { EmptyState, ErrorNotice, LoadingRows, Notice, PageHeader, Panel } from 
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
 import { errorMessage } from '@/lib/api';
 import { dateOnly, initials } from '@/lib/format';
-import { useSession } from '@/lib/session';
+import { useCompany, useSession } from '@/lib/session';
 import { useData } from '@/lib/use-data';
 import type { Role, TeamMember } from '@/lib/types';
 import { useApi } from '@/lib/workspace-context';
@@ -24,6 +24,7 @@ export function generatePassword(length = 12) {
 export default function TeamPage() {
   const api = useApi();
   const { user } = useSession();
+  const managed = Boolean(useCompany().company?.managed_by_autoaudit);
   const [tick, setTick] = useState(0);
   const [editing, setEditing] = useState<TeamMember | null>(null);
   const [created, setCreated] = useState<{ email: string; password: string; name: string } | null>(null);
@@ -35,7 +36,9 @@ export default function TeamPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Tim & Akses" description="Tambahkan akun untuk anggota tim Anda. Semua akun di company ini memakai data yang sama."
-        actions={<ShimmerButton onClick={() => { setEditing(null); form.open(); }} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-12 px-5 font-semibold"><Plus className="mr-2 size-5" aria-hidden="true" />Tambah anggota</ShimmerButton>} />
+        actions={managed ? undefined : <ShimmerButton onClick={() => { setEditing(null); form.open(); }} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-12 px-5 font-semibold"><Plus className="mr-2 size-5" aria-hidden="true" />Tambah anggota</ShimmerButton>} />
+
+      {managed && <Notice status="accent">Akun company ini dikelola dari AutoAudit. Anggota masuk lewat akun AutoAudit company, jadi akun baru tidak dapat ditambahkan di sini.</Notice>}
 
       {created && (
         <Notice status="success" title={`Akun ${created.name} sudah dibuat`}

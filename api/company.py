@@ -53,6 +53,7 @@ def get_company_settings(request: Request):
         'search_locked': company['search_locked'], 'search_terms': company['search_terms'],
         'personal_terms': mine, 'effective_terms': effective_terms(user['role'], company, mine),
         'tracked_phones': phones, 'role': user['role'], 'permissions': permissions(user['role'], company['search_locked']),
+        'managed_by_autoaudit': workspace_id().startswith('aa-'),
     }
 
 
@@ -124,17 +125,18 @@ def _companies(conn, only=None):
            FROM ids i LEFT JOIN xm.app_preferences ap ON ap.company_id = i.company_id
            WHERE (%s::text IS NULL OR i.company_id = %s) ORDER BY ap.company_name NULLS LAST, i.company_id""", (only, only)).fetchall()
     users = conn.execute(
-        """SELECT id, email, display_name, role, is_locked, created_at, workspace_id FROM xm.users
+        """SELECT id, email, display_name, role, is_locked, created_at, workspace_id, autoaudit_key IS NOT NULL AS sso FROM xm.users
            WHERE workspace_id IS NOT NULL ORDER BY (role = 'user'), created_at""").fetchall()
     by_company = {}
     for user in users:
-        by_company.setdefault(user['workspace_id'], []).append({key: user[key] for key in ('id', 'email', 'display_name', 'role', 'is_locked', 'created_at')})
+        by_company.setdefault(user['workspace_id'], []).append({key: user[key] for key in ('id', 'email', 'display_name', 'role', 'is_locked', 'created_at', 'sso')})
     result = []
     for row in rows:
         members = by_company.get(row['company_id'], [])
         # The account the platform admin acts as when entering this company's workspace.
         owner = next((u for u in members if u['role'] == 'company_admin'), None) or (members[0] if members else None)
         result.append({**row, 'name': row['company_name'] or row['company_id'], 'users': members,
+                       'source': 'autoaudit' if row['company_id'].startswith('aa-') else 'xm',
                        'owner_id': owner['id'] if owner else None})
     return result
 

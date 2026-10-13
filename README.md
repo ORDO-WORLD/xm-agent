@@ -64,6 +64,17 @@ Tiga peran:
 
 Akun terkunci menampilkan layar kosong dengan latar blur dan tautan WhatsApp admin. Hak akses ditegakkan di server pada setiap permintaan.
 
+### Masuk lewat AutoAudit
+
+Dengan `XM_SSO_ENABLED=1` dan `AUTOAUDIT_BASE_URL` terisi, Property menjadi modul AutoAudit. Di AutoAudit, `PROPERTY_PUBLIC_BASE_URL` harus berisi alamat Property dan `PROPERTY_SSO_SECRET` harus terisi; Property sendiri tidak menyimpan secret.
+
+- **Siapa yang masuk:** company yang modul Property-nya aktif di AutoAudit (Company Settings → Modules) masuk sebagai super admin company. Superadmin dan Superadmin user AutoAudit masuk sebagai administrator platform. Superior (Team Access) tidak mendapat akses.
+- **Company dibuat otomatis** saat company itu pertama kali membuka Property: workspace `aa-<id company AutoAudit>`, langsung terpasang ke company AutoAudit-nya sehingga daftar sales di Unggah Data siap dipakai. Company lama tidak disentuh.
+- **Dua asal akun:** akun dari AutoAudit hanya bisa masuk lewat AutoAudit (login password ditolak), akun yang dibuat di sini tetap memakai email dan password. Menu Perusahaan menandai tiap company "Akun dari AutoAudit" atau "Akun XM".
+- **Company dari AutoAudit tidak bisa menambah anggota** di Tim & Akses, karena akun ber-password tidak ikut terputus saat modul dimatikan.
+- **Sesi:** paling lama 15 menit, lalu browser memperbaruinya sendiri lewat AutoAudit. Setiap permintaan ditanyakan ulang ke AutoAudit: modul dimatikan atau sesi AutoAudit dicabut berarti akses langsung putus. Bila AutoAudit tidak dapat dihubungi, permintaan dijawab 503 dan sesi tidak dihapus.
+- **Saat modul dimatikan** data company tetap tersimpan dan sambungan sales tetap menarik chat.
+
 ## Sambungan AutoAudit
 
 Chat dari sales AutoAudit bisa masuk ke sebuah company tanpa unggah manual. Rancangannya ada di [docs/DESAIN_INTEGRASI_AUTOAUDIT_2026-10-09.md](docs/DESAIN_INTEGRASI_AUTOAUDIT_2026-10-09.md).

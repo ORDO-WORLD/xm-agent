@@ -15,6 +15,8 @@ export type User = {
   is_locked: boolean;
   company_name?: string | null;
   workspace_id?: string | null;
+  /** Signed in through AutoAudit; the session is renewed there, not with a password. */
+  sso?: boolean;
 };
 
 export type Permissions = {
@@ -38,6 +40,8 @@ export type CompanySettings = {
   tracked_phones: string[];
   role: Role;
   permissions: Permissions;
+  /** The company and its accounts come from AutoAudit; members cannot be added here. */
+  managed_by_autoaudit?: boolean;
 };
 
 /** A buyer or listing card: one unique text, with every posting folded into it. */
@@ -221,7 +225,8 @@ export type CompanySummary = {
   listing_group_by: GroupBy;
   autoaudit_company_id: number | null;
   autoaudit_company_name: string | null;
-  users: { id: string; email: string; display_name: string; role: Role; is_locked: boolean; created_at: string }[];
+  source: 'autoaudit' | 'xm';
+  users: { id: string; email: string; display_name: string; role: Role; is_locked: boolean; created_at: string; sso: boolean }[];
 };
 
 export type DeployStatus = { enabled: false } | {

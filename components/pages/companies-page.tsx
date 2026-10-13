@@ -47,6 +47,7 @@ export default function CompaniesPage({ navigate }: { navigate?: Navigate }) {
                   <Chip variant="soft" size="md">{number(company.buyers)} buyer</Chip>
                   <Chip variant="soft" size="md">{number(company.listings)} listing</Chip>
                   <Chip variant="soft" size="md"><UsersRound className="mr-1 size-3.5" aria-hidden="true" />{company.users.length} akun</Chip>
+                  <Chip variant="soft" color={company.source === 'autoaudit' ? 'accent' : 'default'} size="md">{company.source === 'autoaudit' ? 'Akun dari AutoAudit' : 'Akun XM'}</Chip>
                   {company.search_locked && <Chip variant="soft" color="warning" size="md">Kata kunci dikunci</Chip>}
                   {company.autoaudit_company_name && <Chip variant="soft" color="accent" size="md"><Link2 className="mr-1 size-3.5" aria-hidden="true" />AutoAudit: {company.autoaudit_company_name}</Chip>}
                 </div>

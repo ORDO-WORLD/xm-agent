@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type SyntheticEvent } from 'react';
+import { useEffect, useState, type SyntheticEvent } from 'react';
 import { Input, Label, TextField } from '@heroui/react';
 import { ArrowRight, Eye, EyeOff, LineChart, ShieldCheck, Sparkles } from 'lucide-react';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
@@ -23,7 +23,15 @@ export function LoginScreen({ onLogin, offline }: { onLogin: (user: User) => voi
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [sso, setSso] = useState(false);
   const [error, setError] = useState(offline ? 'Aplikasi belum dapat dihubungi. Pastikan layanan berjalan, lalu muat ulang halaman.' : '');
+
+  useEffect(() => {
+    let alive = true;
+    void fetch('/api/auth/sso/config').then((response) => (response.ok ? (response.json() as Promise<{ enabled?: boolean }>) : null))
+      .then((body) => { if (alive) setSso(Boolean(body?.enabled)); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   async function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -109,6 +117,12 @@ export function LoginScreen({ onLogin, offline }: { onLogin: (user: User) => voi
               className="mt-6 h-14 w-full text-lg font-semibold disabled:cursor-not-allowed disabled:opacity-60">
               {loading ? 'Memeriksa akun…' : <>Masuk <ArrowRight className="ml-2 size-5" aria-hidden="true" /></>}
             </ShimmerButton>
+            {sso && (
+              <button type="button" onClick={() => window.location.assign('/api/auth/sso/start')}
+                className="mt-3 flex h-14 w-full items-center justify-center rounded-2xl border border-border text-lg font-semibold text-accent hover:bg-default">
+                Masuk lewat AutoAudit
+              </button>
+            )}
             <p className="mt-5 text-center text-sm leading-relaxed text-muted">Lupa password? Hubungi super admin company Anda untuk mengatur ulang.</p>
           </form>
         </BlurFade>

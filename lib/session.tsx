@@ -19,6 +19,19 @@ export function useSession() {
   return value;
 }
 
+/* An AutoAudit session lasts 15 minutes; when it ends the browser goes back through AutoAudit by itself. */
+const SSO_KEY = 'xm.sso';
+function rememberSso(on: boolean) {
+  try { if (on) window.localStorage.setItem(SSO_KEY, '1'); else window.localStorage.removeItem(SSO_KEY); } catch { /* private mode */ }
+}
+function renewThroughAutoAudit() {
+  try { if (window.localStorage.getItem(SSO_KEY) !== '1') return false; } catch { return false; }
+  // Cleared first: if AutoAudit refuses, coming back shows the sign-in screen instead of looping.
+  rememberSso(false);
+  window.location.assign('/api/auth/sso/start');
+  return true;
+}
+
 async function fetchMe() {
   const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
   if (response.status === 401) return null;
@@ -32,11 +45,16 @@ export function useAuth() {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    const refresh = () => { void fetchMe().then((next) => { setUser(next); setFailed(false); }).catch(() => {}); };
-    void fetchMe().then(setUser).catch(() => { setFailed(true); setUser(null); });
+    const settle = (next: User | null) => {
+      if (next) rememberSso(Boolean(next.sso));
+      else if (renewThroughAutoAudit()) return;
+      setUser(next);
+    };
+    const refresh = () => { void fetchMe().then((next) => { settle(next); setFailed(false); }).catch(() => {}); };
+    void fetchMe().then(settle).catch(() => { setFailed(true); setUser(null); });
     // A locked or unlocked account must be noticed quickly, without a reload.
     const timer = window.setInterval(refresh, 5000);
-    const onUnauthorized = () => setUser(null);
+    const onUnauthorized = () => settle(null);
     const onLocked = () => setUser((current) => (current ? { ...current, is_locked: true } : current));
     window.addEventListener('focus', refresh);
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
@@ -51,6 +69,7 @@ export function useAuth() {
 
   const logout = useCallback(() => {
     try { window.sessionStorage.removeItem(MANAGE_KEY); } catch { /* private mode */ }
+    rememberSso(false);
     void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => { window.location.hash = ''; setUser(null); });
   }, []);
   return { user, setUser, logout, failed };

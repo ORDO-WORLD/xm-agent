@@ -37,7 +37,7 @@ ACTIONS = {
     'index.failed': 'Proses ulang gagal', 'autoaudit.connect': 'Sambungkan AutoAudit', 'autoaudit.disconnect': 'Putuskan AutoAudit',
     'autoaudit.sync': 'Minta sinkronisasi AutoAudit', 'autoaudit.pull': 'Tarikan AutoAudit', 'autoaudit.failed': 'Tarikan AutoAudit gagal',
     'autoaudit.link': 'Company AutoAudit',
-    'auth.login': 'Masuk', 'auth.logout': 'Keluar', 'auth.login_failed': 'Gagal masuk', 'auth.password': 'Ganti password',
+    'auth.login': 'Masuk', 'auth.sso_login': 'Masuk lewat AutoAudit', 'auth.logout': 'Keluar', 'auth.login_failed': 'Gagal masuk', 'auth.password': 'Ganti password',
     'team.add': 'Tambah akun', 'team.edit': 'Ubah akun', 'company.create': 'Buat company', 'company.rename': 'Ubah nama company',
     'company.enter': 'Masuk ke company',
     'export.pdf': 'Unduh PDF', 'export.all': 'Unduh semua match', 'export.stock': 'Ekspor Excel stok',

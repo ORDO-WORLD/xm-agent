@@ -23,6 +23,7 @@ from qdrant import query as qdrant_query
 from qdrant import status as qdrant_status
 from access import SESSION_PATHS, is_public, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
+from sso import Unavailable as SsoUnavailable
 from integration import authenticate as integration_authenticate, is_export_path, router as integration_router
 from entities import migrate_v4
 from runtime_cache import cached_stats
@@ -77,7 +78,11 @@ async def require_login(request: Request, call_next):
             response.headers['Vary'] = 'Authorization'
             return response
     if not is_public(path):
-        user = current_user(request)
+        try:
+            user = current_user(request)
+        except SsoUnavailable:
+            # Fail closed, but keep the session: AutoAudit being down is not a sign-out.
+            return JSONResponse({'detail': 'AutoAudit belum dapat dihubungi. Coba lagi sebentar.'}, status_code=503)
         if not user:
             return JSONResponse({'detail': 'Sesi login diperlukan'}, status_code=401)
         if user['is_locked'] and path not in SESSION_PATHS:
