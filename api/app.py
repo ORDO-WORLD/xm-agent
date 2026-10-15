@@ -23,7 +23,7 @@ from qdrant import query as qdrant_query
 from qdrant import status as qdrant_status
 from access import PUBLIC_PATHS, SESSION_PATHS, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
-from integration import authenticate as integration_authenticate, is_export_path, router as integration_router
+from integration import authenticate as integration_authenticate, is_export_path, is_import_path, router as integration_router
 from entities import migrate_v4
 from runtime_cache import cached_stats
 from matching_scope import document_scope_filter, history_scope_filter
@@ -63,7 +63,7 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
-    if is_export_path(path):
+    if is_export_path(path) or is_import_path(path):
         try:
             key = integration_authenticate(request)
         except HTTPException as exc:
@@ -168,6 +168,7 @@ def imports():
         ).fetchall()
 
 
+@app.post("/integration/imports", status_code=202)
 @app.post("/imports", status_code=202)
 async def upload_import(file: UploadFile = File(...), agent_name: str | None = Form(default=None),
                         matching_mode: str | None = Form(default=None)):
@@ -225,6 +226,18 @@ async def upload_import(file: UploadFile = File(...), agent_name: str | None = F
         )
         conn.commit()
     return {"id": import_id, "status": "queued", "duplicate": False, "agent_name": resolved_agent, "matching_mode": mode}
+
+
+@app.get("/integration/imports/{import_id}")
+def integration_import_status(import_id: uuid.UUID):
+    with connect() as conn:
+        row = conn.execute("""SELECT id,company_id,agent_name,file_name,status,matching_mode,
+          created_at,started_at,finished_at,error,total_messages,processed_messages,
+          request_count,listing_count,ignored_count,duplicate_count FROM xm.imports
+          WHERE id=%s AND company_id=current_setting('xm.workspace_id')""", (import_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Import tidak ditemukan.")
+    return row
 
 
 @app.get("/documents")

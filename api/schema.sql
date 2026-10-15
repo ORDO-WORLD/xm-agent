@@ -417,6 +417,7 @@ CREATE TABLE IF NOT EXISTS xm.integration_keys (
  last_used_at timestamptz,
  revoked_at timestamptz
 );
+ALTER TABLE xm.integration_keys ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'property:export';
 CREATE INDEX IF NOT EXISTS integration_keys_company_idx ON xm.integration_keys(company_id);
 CREATE TABLE IF NOT EXISTS xm.export_jobs (
  id uuid PRIMARY KEY,

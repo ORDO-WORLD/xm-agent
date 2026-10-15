@@ -35,21 +35,28 @@ def is_export_path(path):
     return path == '/integration/exports' or path.startswith('/integration/exports/')
 
 
+def is_import_path(path):
+    return path == "/integration/imports" or path.startswith("/integration/imports/")
+
+
 def authenticate(request):
-    """Bearer keys only grant access to export routes, never ordinary app routes."""
+    """Authenticate a company-bound key with the exact route scope."""
     authorization = request.headers.get('Authorization', '')
     scheme, _, token = authorization.partition(' ')
     if scheme.lower() != 'bearer' or not token.startswith('xm_wf_') or len(token) > 200:
         raise HTTPException(401, 'Token integrasi diperlukan.')
     digest = hashlib.sha256(token.encode()).hexdigest()
     with connect() as conn:
-        key = conn.execute('''SELECT k.id,k.company_id FROM xm.integration_keys k
+        key = conn.execute('''SELECT k.id,k.company_id,k.scope FROM xm.integration_keys k
           JOIN xm.users u ON u.id=k.created_by
           WHERE k.token_hash=%s AND k.revoked_at IS NULL AND NOT u.is_locked
           AND u.role IN ('admin','company_admin')
           AND (u.role='admin' OR u.workspace_id=k.company_id)''', (digest,)).fetchone()
         if not key:
             raise HTTPException(401, 'Token integrasi tidak valid atau sudah dicabut.')
+        required_scope = 'property:upload' if is_import_path(request.url.path.rstrip('/')) else 'property:export'
+        if key['scope'] != required_scope:
+            raise HTTPException(403, 'Scope token tidak mengizinkan endpoint ini.')
         if request.headers.get('X-XM-User-Id'):
             raise HTTPException(403, 'Token integrasi tidak dapat mengganti company.')
         conn.execute('UPDATE xm.integration_keys SET last_used_at=now() WHERE id=%s', (key['id'],))
@@ -60,6 +67,7 @@ def authenticate(request):
 class KeyRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     name: str = Field(min_length=1, max_length=100)
+    scope: Literal['property:export', 'property:upload'] = 'property:export'
 
     @field_validator('name')
     @classmethod
@@ -73,17 +81,17 @@ class KeyRequest(BaseModel):
 def create_key(payload: KeyRequest, request: Request):
     token = 'xm_wf_' + secrets.token_urlsafe(32)
     with connect() as conn:
-        row = conn.execute('''INSERT INTO xm.integration_keys(id,company_id,created_by,name,token_hash)
-          VALUES(%s,%s,%s,%s,%s) RETURNING id,name,created_at''',
-          (uuid.uuid4(), workspace_id(), current_user(request)['id'], payload.name, hashlib.sha256(token.encode()).hexdigest())).fetchone()
+        row = conn.execute('''INSERT INTO xm.integration_keys(id,company_id,created_by,name,token_hash,scope)
+          VALUES(%s,%s,%s,%s,%s,%s) RETURNING id,name,created_at''',
+          (uuid.uuid4(), workspace_id(), current_user(request)['id'], payload.name, hashlib.sha256(token.encode()).hexdigest(), payload.scope)).fetchone()
         conn.commit()
-    return {**row, 'token': token, 'scope': 'property:export', 'company_id': workspace_id()}
+    return {**row, 'token': token, 'scope': payload.scope, 'company_id': workspace_id()}
 
 
 @router.get('/keys')
 def list_keys():
     with connect() as conn:
-        rows = conn.execute('''SELECT id,name,created_at,last_used_at,revoked_at FROM xm.integration_keys
+        rows = conn.execute('''SELECT id,name,scope,created_at,last_used_at,revoked_at FROM xm.integration_keys
           WHERE company_id=%s ORDER BY created_at DESC''', (workspace_id(),)).fetchall()
     return {'keys': rows}
 

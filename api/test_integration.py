@@ -196,3 +196,38 @@ class WorkflowIntegrationTests(WorkflowIntegrationCase):
             self.assertTrue(process_next_export())
         self.assertEqual(self.status(job)['status'], 'cancelled')
         self.assertFalse((self.files / job['job_id']).exists())
+
+
+class UploadIntegrationTests(WorkflowIntegrationCase):
+    def test_upload_scope_status_duplicate_and_company_isolation(self):
+        key = self.call(self.boss, '/integration/keys', 'POST',
+                        {'name': 'Upload automation', 'scope': 'property:upload'}, status=201)
+        client = self.bearer(key['token'])
+        boundary = 'upload-integration-test'
+        raw = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="cleaned.json"'
+               '\r\nContent-Type: application/json\r\n\r\n'
+               + json.dumps({'salesName': 'Automation', 'chats': {'room': {'name': 'Room',
+                   'messages': [['2026-10-15T10:00:00', LISTING_HOUSE_A, 'Agent']]}}})
+               + f'\r\n--{boundary}--\r\n').encode()
+        def upload(who, status=202):
+            return self.call(who, '/integration/imports', 'POST', raw=raw,
+                             content_type='multipart/form-data; boundary=' + boundary, status=status)
+        upload(self.workflow, 403)
+        upload(self.boss, 401)
+        job = upload(client)
+        self.assertFalse(job['duplicate'])
+        self.assertEqual(upload(client)['id'], job['id'])
+        self.assertTrue(upload(client)['duplicate'])
+        path = '/integration/imports/' + job['id']
+        self.assertEqual(self.call(client, path)['company_id'], self.company['company_id'])
+        self.process(job)
+        self.assertEqual(self.call(client, path)['status'], 'completed')
+        self.call(client, '/integration/exports', 'POST', {'request_id': 'denied'}, status=403)
+        self.call(client, '/workspace', status=401)
+        _, _, other = self.make_company('Other upload')
+        other_key = self.call(other, '/integration/keys', 'POST',
+                              {'name': 'Other upload', 'scope': 'property:upload'}, status=201)
+        self.call(self.bearer(other_key['token']), path, status=404)
+        self.call(client, path, owner=self.user, status=403)
+        self.call(self.boss, '/integration/keys/' + key['id'], 'DELETE')
+        self.call(client, path, status=401)
