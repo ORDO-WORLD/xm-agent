@@ -63,10 +63,12 @@ class PropertyControlTests(unittest.TestCase):
         conn.execute.return_value.fetchone.return_value = {'id': 'member-uuid', 'role': 'user', 'workspace_id': 'legacy', 'is_locked': False, 'autoaudit_key': 'superior:3', 'autoaudit_company_id': 7, 'session_id': 'session', 'sso_ticket': 'ticket'}
         def exchange(_):
             self.assertEqual(active, [])
-            return {'actor': actor}
+            return {'actor': actor, 'auditEligible': True}
         request = Request({'type': 'http', 'path': '/auth/me', 'method': 'GET', 'query_string': b'', 'headers': [(b'cookie', b'xm_session=browser')]})
         with patch('auth.connect', return_value=conn), patch('sso.exchange', side_effect=exchange):
             self.assertEqual(current_user(request)['id'], 'member-uuid')
+            self.assertEqual(request.state.property_actor, actor)
+            self.assertTrue(request.state.property_audit_eligible)
             self.assertFalse(_still_valid('ticket', 'superior:3', 'user', 8))
 
     def test_identity_and_login_have_no_local_password_fallback(self):
@@ -104,21 +106,51 @@ class PropertyControlTests(unittest.TestCase):
         for change in ({'method': 'POST'}, {'path': '/settings'}, {'query': 'offset=1'}, {'bodyHash': '0'*64}, {'exp': 0}):
             asyncio.run(exercise(change))
 
-    def test_browser_configuration_mutations_are_blocked_but_business_status_is_not(self):
+    def test_native_settings_require_sso_origin_and_existing_role_but_accounts_stay_in_aa(self):
         # Module imports construct file paths only; direct call below has all DB/network access mocked.
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'UPLOAD_DIR': directory, 'XM_EXPORT_DIR': directory, 'XM_INTEGRATION_EXPORT_DIR': directory}):
             from app import require_login
-            async def check(path, method):
-                req = Request({'type': 'http', 'path': path, 'method': method, 'query_string': b'', 'headers': []})
+            async def check(path, method, role='company_admin', origin='http://localhost:9004'):
+                headers = [(b'host', b'127.0.0.1:8100'), (b'x-forwarded-host', b'localhost:9004'), (b'x-forwarded-proto', b'http')]
+                if origin: headers.append((b'origin', origin.encode()))
+                req = Request({'type': 'http', 'path': path, 'method': method, 'scheme': 'http', 'query_string': b'', 'headers': headers})
                 async def next_handler(_): return Response(status_code=204)
-                user = {'id': 'user', 'role': 'company_admin', 'workspace_id': 'aa-7', 'is_locked': False}
-                with patch('app.current_user', return_value=user), patch('app.connect') as db:
+                user = {'id': 'user', 'role': role, 'workspace_id': 'aa-7', 'is_locked': False}
+                def current_user(request):
+                    request.state.property_actor = {'role': 'company', 'actorType': 'company', 'actorId': 7, 'companyId': 7}
+                    request.state.property_audit_eligible = True
+                    return user
+                with patch('app.current_user', side_effect=current_user), patch('app.connect') as db:
                     response = await require_login(req, next_handler)
                     db.assert_not_called()
                     return response.status_code
-            for path in ['/settings', '/stock/tracked', '/search-default', '/integration/keys', '/team/users']:
+            for path in ['/settings', '/stock/tracked', '/search-default', '/integration/keys']:
+                self.assertEqual(asyncio.run(check(path, 'PUT')), 204)
+                self.assertEqual(asyncio.run(check(path, 'PUT', origin=None)), 403)
+                self.assertEqual(asyncio.run(check(path, 'PUT', origin='https://other.test')), 403)
+                self.assertEqual(asyncio.run(check(path, 'PUT', role='user')), 403)
+            for path in ['/team/users', '/auth/password', '/admin/companies/aa-7', '/property-control/company/lock']:
                 self.assertEqual(asyncio.run(check(path, 'PUT')), 403)
+            self.assertEqual(asyncio.run(check('/integration/keys', 'GET')), 204)
+            self.assertEqual(asyncio.run(check('/integration/keys', 'GET', role='user')), 403)
+            self.assertEqual(asyncio.run(check('/preferences', 'PUT', role='user')), 204)
             self.assertEqual(asyncio.run(check('/entities/status', 'POST')), 204)
+
+    def test_native_setting_audit_uses_validated_actor_and_skips_login_as(self):
+        request = Request({'type': 'http', 'method': 'PUT', 'path': '/preferences', 'scheme': 'http', 'headers': [(b'host', b'xm.test'), (b'origin', b'http://xm.test')]})
+        request.state.property_actor = {'role': 'company', 'actorType': 'superior', 'actorId': 3, 'companyId': 7}
+        request.state.property_audit_eligible = True
+        for as_admin in (False, True):
+            context = property_control.browser_context(request, as_admin)
+            conn = MagicMock()
+            conn.execute.return_value.fetchone.return_value = {'company_name': 'Company', 'id': 9}
+            with activity.control_scope(context):
+                activity.record(conn, 'change', 'preferences.save', 'edit', {'direction': 'private'})
+            args = conn.execute.call_args.args[1]
+            self.assertEqual(args[-1], None if as_admin else 'pending')
+            if not as_admin:
+                self.assertEqual(json.loads(args[-3])['_autoaudit']['superior_id'], 3)
+                self.assertNotIn('private', json.dumps(json.loads(args[-3])['_autoaudit']))
 
     def test_activity_and_business_mutation_share_transaction_and_redact_relay(self):
         ctx = {'auditEligible': True, 'actor': {'role': 'company', 'actorType': 'superior', 'actorId': 3}, 'companyId': 7, 'eventId': '11111111-1111-4111-8111-111111111111'}

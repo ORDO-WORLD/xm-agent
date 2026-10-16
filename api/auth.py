@@ -99,7 +99,7 @@ def current_user(request: Request):
     ticket, session_id, key = user.pop('sso_ticket'), user.pop('session_id'), user.pop('autoaudit_key')
     company_id = user.pop('autoaudit_company_id')
     user['sso'] = bool(ticket)
-    if not ticket or not _still_valid(ticket, key, user['role'], company_id):
+    if not ticket or not _still_valid(ticket, key, user['role'], company_id, request=request):
         with connect() as conn:
             conn.execute('DELETE FROM xm.sessions WHERE id=%s', (session_id,))
             conn.commit()
@@ -108,12 +108,16 @@ def current_user(request: Request):
     return user
 
 
-def _still_valid(ticket: str, key: str, role=None, company_id=None) -> bool:
+def _still_valid(ticket: str, key: str, role=None, company_id=None, *, request=None) -> bool:
     """Ask AutoAudit again; sso.Unavailable passes through so an outage does not look like a sign-out."""
     answer = sso.exchange(ticket)
     try:
         actor = answer['actor'] if answer else None
-        return bool(actor) and sso.identity_key(actor) == key and (role is None or sso.actor_role(actor) == role) and (actor['role'] == 'superadmin' or actor['companyId'] == company_id)
+        valid = bool(actor) and sso.identity_key(actor) == key and (role is None or sso.actor_role(actor) == role) and (actor['role'] == 'superadmin' or actor['companyId'] == company_id)
+        if valid and request is not None:
+            request.state.property_actor = actor
+            request.state.property_audit_eligible = answer.get('auditEligible', False)
+        return valid
     except (KeyError, TypeError, ValueError):
         return False
 

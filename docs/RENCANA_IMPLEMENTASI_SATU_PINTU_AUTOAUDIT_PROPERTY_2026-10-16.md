@@ -1,6 +1,8 @@
 # Rencana implementasi satu pintu AutoAudit–Property
 
 Tanggal: 16 Oktober 2026, Asia/Jakarta. Status: **implementasi kode lokal selesai; rekonsiliasi data dan cutover tertunda**.
+
+**Koreksi produk disetujui dan diimplementasikan 16 Oktober 2026:** T6 memakai halaman pengaturan native XM dan tampilan Perusahaan existing dengan Login As; T5 mengizinkan setting native melalui sesi SSO tervalidasi, Origin XM, izin existing dan outbox audit. Pengelolaan akun/password/Company/Team Access tetap AA. Instruksi “setting hanya di AA” pada rincian rencana awal di bawah sudah digantikan koreksi ini. Tidak ada schema baru untuk koreksi UI/akses ini.
 Desain: [satu pintu AutoAudit–Property](DESAIN_SATU_PINTU_AUTOAUDIT_PROPERTY_2026-10-16.md).
 AA = `/Users/oktaariaditya/ordo/sales-audit-2`; XM = `/Users/oktaariaditya/ordo/xm-agent`. Semua path tugas di bawah relatif terhadap root repo yang diberi label. `(baru)` berarti file/route/schema belum ada.
 

@@ -26,7 +26,6 @@ from access import SESSION_PATHS, is_public, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
 from sso import Unavailable as SsoUnavailable
 from integration import authenticate as integration_authenticate, is_export_path, router as integration_router
-from entities import migrate_v4
 from runtime_cache import cached_stats
 from matching_scope import document_scope_filter, history_scope_filter
 import activity
@@ -45,7 +44,6 @@ class BuyerBatchRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_schema()
-    migrate_v4()
     try:
         ensure_collection()
     except Exception as exc:
@@ -66,7 +64,7 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
-    from property_control import resolve as control_identity, needs_control
+    from property_control import resolve as control_identity, needs_control, setting_path, browser_context
     control = bool(request.headers.get('x-autoaudit-property-control'))
     # Local account/Company CRUD has no place in the AutoAudit-owned account directory.
     if path == '/auth/password' or path.startswith('/team') or (path.startswith('/admin/companies') and request.method != 'GET') or path.startswith('/admin/autoaudit'):
@@ -131,7 +129,13 @@ async def require_login(request: Request, call_next):
             return JSONResponse({'detail': 'Workspace akun belum siap'}, status_code=503)
         # Inside another account's company the administrator is still the one acting.
         as_admin = owner.get('workspace_id') != user.get('workspace_id')
-        with workspace_scope(owner['workspace_id'], owner['id']), actor_scope(user, as_admin):
+        context = None
+        if request.method not in ('GET', 'HEAD', 'OPTIONS') and setting_path(path):
+            try:
+                context = browser_context(request, as_admin)
+            except HTTPException as exc:
+                return JSONResponse({'detail': exc.detail}, status_code=exc.status_code)
+        with workspace_scope(owner['workspace_id'], owner['id']), actor_scope(user, as_admin), activity.control_scope(context):
             response = await call_next(request)
             response.headers['Cache-Control'] = 'private, no-store'
             response.headers['Vary'] = 'Cookie, X-XM-User-Id'
