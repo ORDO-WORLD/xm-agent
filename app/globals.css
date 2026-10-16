@@ -1000,10 +1000,13 @@ body:has(.integration-revoke-dialog) .settings-tabs .tabs__panel { overflow:hidd
 .dashboard-page { --radius-2xl:8px; --radius-3xl:8px; }
 .dashboard-page :is(.xm-card,.rounded-3xl,.rounded-2xl,.chip) { border-radius:8px; }
 .dashboard-page .dashboard-hero-button { min-height:40px; height:auto; padding:9px 16px; border-radius:6px; font-size:14px; line-height:1.5; }
-.dashboard-page .dashboard-match-button { background:#fff; }
+.dashboard-page .dashboard-match-button { background:#fff; cursor:pointer; }
 .dashboard-keyword-note { display:flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid #fde68a; border-radius:6px; background:#fffbeb; color:#92400e; font-size:13px; line-height:1.5; }
 .dashboard-page .dashboard-periods { display:flex; flex-wrap:nowrap; width:100%; margin:0; padding:0 0 2px; overflow-x:auto; gap:8px; }
-.dashboard-periods > button { flex:1 0 auto; min-width:max-content; border-radius:6px; white-space:nowrap; }
+.dashboard-page .dashboard-periods > button, .dashboard-page .dashboard-periods > [data-slot="popover-trigger"] { flex:1 0 auto; min-width:max-content; }
+.dashboard-page .dashboard-periods .button { border-radius:6px; font-weight:600; white-space:nowrap; cursor:pointer; }
+.dashboard-page .dashboard-periods > [data-slot="popover-trigger"] .button { width:100%; }
+.dashboard-page .dashboard-periods .button--secondary { background:#fff; color:#111827; border:1px solid #9ca3af; }
 .dashboard-summary-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
 .dashboard-summary-grid > div { min-width:0; }
 .dashboard-summary-grid > div > div { height:100%; }
@@ -1032,7 +1035,7 @@ body:has(.integration-revoke-dialog) .settings-tabs .tabs__panel { overflow:hidd
 @media (min-width:1536px) { .dashboard-summary-grid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
 @media (max-width:600px) {
   .dashboard-summary-grid { grid-template-columns:minmax(0,1fr); gap:12px; }
-  .dashboard-periods > button { padding:6px 9px; font-size:12px; }
+  .dashboard-page .dashboard-periods .button { padding:6px 9px; font-size:12px; }
   .dashboard-budget-pills { min-width:120px; }
   .dashboard-opportunity-counts { gap:6px; font-size:11px; }
 }

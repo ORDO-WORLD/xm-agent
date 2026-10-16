@@ -3,7 +3,7 @@ import '@fontsource-variable/instrument-sans';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Property Auto Audit · Property Matchmaker',
+  title: 'Agent Developer AutoAudit',
   description: 'Audit percakapan WhatsApp dan pencocokan otomatis buyer dengan listing property.',
   icons: {
     icon: { url: '/property-autoaudit-icon.png', type: 'image/png' },

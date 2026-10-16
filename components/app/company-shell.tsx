@@ -83,7 +83,7 @@ export function CompanyShell({ route, navigate, children }: { route: string; nav
   const title = route === 'perusahaan' ? 'Perusahaan' : [...MAIN, ...MANAGE, ...platform].find((item) => item.id === route)?.label ?? 'Beranda';
   useEffect(() => {
     const previousTitle = document.title;
-    const menuTitle = `Property AutoAudit | ${title}`;
+    const menuTitle = `Agent Developer AutoAudit | ${title}`;
     document.title = menuTitle;
     return () => {
       if (document.title === menuTitle) document.title = previousTitle;

@@ -89,14 +89,16 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
       {company && company.matching_mode !== 'sales' && !company.search_terms.length ? <p className="dashboard-keyword-note"><Info className="size-4 shrink-0" aria-hidden="true" />Keyword perusahaan belum diatur.</p> : <p className="text-sm leading-relaxed text-muted">{company?.matching_mode === 'sales' ? `Ringkasan mengikuti nomor sales dalam watchlist perusahaan: ${company.tracked_phones.join(' · ') || 'belum ada nomor'}.` : company?.search_terms.length ? `Ringkasan mengikuti keyword perusahaan: ${company.search_terms.join(' · ')}.` : ''}</p>}
 
       <section aria-label="Pilih periode" className="space-y-2">
-        <div className="flex items-center gap-2 text-base font-bold"><CalendarRange className="size-5 text-accent" aria-hidden="true" />Periode yang dilihat</div>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div className="flex items-center gap-2 text-base font-bold"><CalendarRange className="size-5 text-accent" aria-hidden="true" />Periode yang dilihat</div>
+          {data && <p className="text-sm text-muted">{data.period.label}: <strong className="text-foreground">{prettyRange(data.period.date_from, data.period.date_to)}</strong> · dibandingkan dengan {prettyRange(data.period.compare_from, data.period.compare_to)}</p>}
+        </div>
         <PeriodPicker
           className="dashboard-periods" value={period}
           presets={PRESETS.map((item) => ({ id: item.id, label: item.label, range: () => ({ from: '', to: '' }) }))}
           onChange={setPeriod}
           max={todayWib()}
         />
-        {data && <p className="text-sm text-muted">{data.period.label}: <strong className="text-foreground">{prettyRange(data.period.date_from, data.period.date_to)}</strong> · dibandingkan dengan {prettyRange(data.period.compare_from, data.period.compare_to)}</p>}
       </section>
 
       <ErrorNotice message={error} onRetry={reload} />
