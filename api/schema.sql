@@ -1,5 +1,12 @@
 CREATE SCHEMA IF NOT EXISTS xm;
 
+-- One row: hash of the schema/backfill last applied, so routine restarts skip the DDL below.
+CREATE TABLE IF NOT EXISTS xm.bootstrap_state (
+    id smallint PRIMARY KEY CHECK (id = 1),
+    schema_hash text NOT NULL,
+    applied_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS xm.users (
     id uuid PRIMARY KEY,
     email text NOT NULL UNIQUE,
@@ -70,6 +77,8 @@ CREATE INDEX IF NOT EXISTS raw_messages_import_idx ON xm.raw_messages(import_id)
 CREATE INDEX IF NOT EXISTS raw_messages_classification_idx ON xm.raw_messages(company_id, classification);
 CREATE INDEX IF NOT EXISTS raw_messages_hash_idx ON xm.raw_messages(company_id, message_hash);
 CREATE INDEX IF NOT EXISTS raw_messages_text_group_idx ON xm.raw_messages(company_id, md5(raw_text));
+-- Lets the planner probe the real newest sent_at; stale stats otherwise estimate recent dashboard ranges as 1 row.
+CREATE INDEX IF NOT EXISTS raw_messages_sent_at_idx ON xm.raw_messages(sent_at);
 
 CREATE TABLE IF NOT EXISTS xm.documents (
     id uuid PRIMARY KEY,
