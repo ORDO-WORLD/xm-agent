@@ -1,16 +1,17 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { Chip, Skeleton } from '@heroui/react';
-import { Boxes, CalendarRange, ChevronRight, Lightbulb, Sparkles, Target, TrendingUp, UploadCloud, Users } from 'lucide-react';
+import { Boxes, CalendarRange, Info, Lightbulb, Sparkles, Target, TrendingDown, TrendingUp, UploadCloud, Users } from 'lucide-react';
 import { BarsChart, RingChart, TrendChart } from '@/components/charts/charts';
 import { colors } from '@/components/charts/chart-setup';
-import { EmptyState, ErrorNotice, IdChip, Panel, Segmented, StatTile, TemperatureChip } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, IdChip, Panel, TemperatureChip } from '@/components/app/primitives';
 import { PeriodPicker } from '@/components/app/period-picker';
 import { AnimatedList } from '@/components/magicui/animated-list';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { BorderBeam } from '@/components/magicui/border-beam';
 import { ShimmerButton } from '@/components/magicui/shimmer-button';
+import { NumberTicker } from '@/components/magicui/number-ticker';
 import { categoryLabel, cleanName, greeting, number, prettyRange, relativeDate, shiftDay, structuredSummary, todayWib } from '@/lib/format';
 import { query } from '@/lib/api';
 import type { Navigate } from '@/lib/router';
@@ -59,7 +60,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
   }
 
   return (
-    <div className="space-y-6">
+    <div className="general-settings dashboard-page space-y-6">
       <BlurFade>
         <div className="relative overflow-hidden rounded-3xl bg-brand p-5 text-brand-foreground sm:p-7">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_85%_20%,rgba(34,211,238,.28),transparent_45%),radial-gradient(circle_at_10%_100%,rgba(37,99,235,.5),transparent_50%)]" />
@@ -73,11 +74,11 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
             </div>
             <div className="flex flex-wrap gap-3">
               {canUpload && (
-                <ShimmerButton onClick={() => navigate?.('data')} background="oklch(0.48 0.235 265)" borderRadius="16px" shimmerColor="#a5f3fc" className="h-13 px-6 text-base font-semibold">
+                <ShimmerButton onClick={() => navigate?.('data')} background="oklch(0.48 0.235 265)" borderRadius="6px" shimmerColor="#a5f3fc" className="dashboard-hero-button h-13 px-6 text-base font-semibold">
                   <UploadCloud className="mr-2 size-5" aria-hidden="true" />Unggah chat baru
                 </ShimmerButton>
               )}
-              <button type="button" onClick={() => navigate?.('cocokkan')} className="inline-flex h-13 items-center gap-2 rounded-2xl bg-white px-6 text-base font-semibold text-brand hover:bg-blue-50">
+              <button type="button" onClick={() => navigate?.('cocokkan')} className="dashboard-hero-button dashboard-match-button inline-flex h-13 items-center gap-2 bg-white px-6 text-base font-semibold text-brand hover:bg-blue-50">
                 <Target className="size-5" aria-hidden="true" />Mulai cocokkan
               </button>
             </div>
@@ -85,12 +86,12 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
         </div>
       </BlurFade>
 
-      <p className="text-sm leading-relaxed text-muted">{company?.matching_mode === 'sales' ? `Ringkasan mengikuti nomor sales dalam watchlist perusahaan: ${company.tracked_phones.join(' · ') || 'belum ada nomor'}.` : company?.search_terms.length ? `Ringkasan mengikuti keyword perusahaan: ${company.search_terms.join(' · ')}.` : 'Ringkasan menampilkan data perusahaan ini. Keyword perusahaan belum diatur.'}</p>
+      {company && company.matching_mode !== 'sales' && !company.search_terms.length ? <p className="dashboard-keyword-note"><Info className="size-4 shrink-0" aria-hidden="true" />Keyword perusahaan belum diatur.</p> : <p className="text-sm leading-relaxed text-muted">{company?.matching_mode === 'sales' ? `Ringkasan mengikuti nomor sales dalam watchlist perusahaan: ${company.tracked_phones.join(' · ') || 'belum ada nomor'}.` : company?.search_terms.length ? `Ringkasan mengikuti keyword perusahaan: ${company.search_terms.join(' · ')}.` : ''}</p>}
 
       <section aria-label="Pilih periode" className="space-y-2">
         <div className="flex items-center gap-2 text-base font-bold"><CalendarRange className="size-5 text-accent" aria-hidden="true" />Periode yang dilihat</div>
         <PeriodPicker
-          value={period}
+          className="dashboard-periods" value={period}
           presets={PRESETS.map((item) => ({ id: item.id, label: item.label, range: () => ({ from: '', to: '' }) }))}
           onChange={setPeriod}
           max={todayWib()}
@@ -100,16 +101,16 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
 
       <ErrorNotice message={error} onRetry={reload} />
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 2xl:grid-cols-4">
-        <BlurFade delay={0.05}><StatTile label="Demand buyer" value={data?.kpi.buyers ?? 0} icon={<Users />} tone="indigo" change={data?.kpi.buyers_change} loading={loading && !data} hint="teks sama dihitung satu" /></BlurFade>
-        <BlurFade delay={0.1}><StatTile label="Listing baru" value={data?.kpi.listings ?? 0} icon={<Boxes />} tone="cyan" change={data?.kpi.listings_change} loading={loading && !data} /></BlurFade>
+      <div className="dashboard-summary-grid">
+        <BlurFade delay={0.05}><DashboardStat label="Demand buyer" value={data?.kpi.buyers ?? 0} icon={<Users />} color="#6366f1" change={data?.kpi.buyers_change} loading={loading && !data} hint="Teks sama dihitung satu" /></BlurFade>
+        <BlurFade delay={0.1}><DashboardStat label="Listing baru" value={data?.kpi.listings ?? 0} icon={<Boxes />} color="#06b6d4" change={data?.kpi.listings_change} loading={loading && !data} /></BlurFade>
         <BlurFade delay={0.15}>
           <div className="relative rounded-[var(--radius-2xl)]">
-            <StatTile label="Match baru" value={data?.kpi.matches ?? 0} icon={<Sparkles />} tone="red" change={data?.kpi.matches_change} loading={loading && !data} hint={data ? `${data.matches.hot} Hot · ${data.matches.warm} Warm` : undefined} />
+            <DashboardStat label="Match baru" value={data?.kpi.matches ?? 0} icon={<Sparkles />} color="#ef4444" change={data?.kpi.matches_change} loading={loading && !data} hint={data ? `${data.matches.hot} Hot · ${data.matches.warm} Warm` : undefined} />
             {!!data?.kpi.matches_hot && <BorderBeam size={90} duration={7} colorFrom="#ef4444" colorTo="#f59e0b" />}
           </div>
         </BlurFade>
-        <BlurFade delay={0.2}><StatTile label="Stok ready" value={data?.status.listing.ready ?? 0} icon={<TrendingUp />} tone="green" loading={loading && !data} hint={data ? `${data.status.listing.on_hold} on-hold · ${data.status.listing.sold} sold` : undefined} /></BlurFade>
+        <BlurFade delay={0.2}><DashboardStat label="Stok ready" value={data?.status.listing.ready ?? 0} icon={<TrendingUp />} color="#059669" loading={loading && !data} hint={data ? `${data.status.listing.on_hold} on-hold · ${data.status.listing.sold} sold` : undefined} /></BlurFade>
       </div>
 
       {data && (
@@ -124,15 +125,15 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
         <Panel>
           <EmptyState animation="searching" title="Belum ada data pada periode ini"
             description={data?.latest_data_date ? `Data terbaru yang ada: ${prettyRange(data.latest_data_date, data.latest_data_date)}. Pilih periode lain atau lompat ke 30 hari terakhir data.` : 'Unggah chat WhatsApp terlebih dahulu agar statistik muncul.'}
-            action={data?.latest_data_date ? <ShimmerButton onClick={jumpToLatest} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-12 px-5 font-semibold">Lihat data terakhir</ShimmerButton> : canUpload ? <ShimmerButton onClick={() => navigate?.('data')} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-12 px-5 font-semibold">Unggah chat</ShimmerButton> : undefined} />
+            action={data?.latest_data_date ? <ShimmerButton onClick={jumpToLatest} background="oklch(0.48 0.235 265)" borderRadius="6px" className="h-12 px-5 font-semibold">Lihat data terakhir</ShimmerButton> : canUpload ? <ShimmerButton onClick={() => navigate?.('data')} background="oklch(0.48 0.235 265)" borderRadius="6px" className="h-12 px-5 font-semibold">Unggah chat</ShimmerButton> : undefined} />
         </Panel>
       )}
 
       {data && data.insights.length > 0 && !empty && (
         <Panel title={<span className="flex items-center gap-2"><Lightbulb className="size-5 text-warning" aria-hidden="true" />Ringkasan untuk Anda</span>} description="Dihitung otomatis dari data periode ini.">
-          <ul className="space-y-2.5">
+          <ul className="dashboard-insights">
             {data.insights.map((line) => (
-              <li key={line} className="flex gap-3 text-base leading-relaxed"><ChevronRight className="mt-1 size-4 shrink-0 text-accent" aria-hidden="true" />{line}</li>
+              <li key={line}><span className="dashboard-insight-dot" aria-hidden="true" /><span>{line}</span></li>
             ))}
           </ul>
         </Panel>
@@ -164,8 +165,8 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
             ) : <EmptyState compact title="Belum ada lokasi terbaca" />}
           </Panel>
 
-          <Panel title="Anggaran buyer" description="Berapa banyak buyer menurut batas harga yang mereka sebut. Harga per m² atau per tahun tidak dihitung."
-            action={<Segmented label="Jenis anggaran" value={budgetKind} onChange={setBudgetKind} options={[{ id: 'sale', label: 'Beli' }, { id: 'rent', label: 'Sewa' }]} />}>
+          <Panel className="dashboard-budget" title="Anggaran buyer" description="Jumlah buyer berdasarkan anggaran."
+            action={<fieldset className="dashboard-budget-pills" aria-label="Jenis anggaran"><button type="button" aria-pressed={budgetKind === 'sale'} onClick={() => setBudgetKind('sale')}>Beli</button><button type="button" aria-pressed={budgetKind === 'rent'} onClick={() => setBudgetKind('rent')}>Sewa</button></fieldset>}>
             <BarsChart height={260} ariaLabel="Diagram batang anggaran buyer" labels={data.budget.labels}
               series={[{ label: budgetKind === 'sale' ? 'Buyer (beli)' : 'Buyer (sewa)', data: data.budget[budgetKind], color: budgetKind === 'sale' ? colors.violet : colors.teal }]} />
             {data.budget.skipped > 0 && <p className="mt-2 text-sm text-muted">{number(data.budget.skipped)} buyer tidak menyebut anggaran yang bisa dibandingkan.</p>}
@@ -209,6 +210,14 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
   );
 }
 
+function DashboardStat({ label, value, icon, color, change, hint, loading }: { label: string; value: number; icon: ReactNode; color: string; change?: number | null; hint?: string; loading?: boolean }) {
+  return <article className="stock-summary dashboard-summary" style={{ '--stock-summary-color': color } as CSSProperties}>
+    <div className="dashboard-summary-count">{loading ? <Skeleton className="h-8 w-14 rounded-md" /> : <><strong className="stock-summary-value"><NumberTicker value={value} key={value} /></strong>{change !== undefined && change !== null && <span className="dashboard-summary-change"><span className={change >= 0 ? 'dashboard-change-up' : 'dashboard-change-down'} aria-hidden="true">{change >= 0 ? <TrendingUp className="size-3.5" /> : <TrendingDown className="size-3.5" />}</span>{Math.abs(change) > 999 ? '>999' : Math.abs(change).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%<span className="sr-only">{change >= 0 ? ' naik' : ' turun'} dibanding periode sebelumnya</span></span>}</>}</div>
+    <div className="stock-summary-label"><h2><span aria-hidden="true" />{label}</h2>{hint && <p>{hint}</p>}</div>
+    <span className="stock-summary-icon" aria-hidden="true">{icon}</span>
+  </article>;
+}
+
 function GapList({ title, rows }: { title: string; rows: { key: string; label: string; buyers: number; listings: number; pressure: number }[] }) {
   if (!rows.length) return <div><p className="text-base font-bold">{title}</p><p className="mt-1 text-base text-muted">Belum ada data permintaan.</p></div>;
   const top = Math.max(...rows.map((row) => row.buyers), 1);
@@ -220,7 +229,7 @@ function GapList({ title, rows }: { title: string; rows: { key: string; label: s
           <li key={row.key}>
             <div className="flex items-baseline justify-between gap-3 text-[0.95rem]">
               <span className="min-w-0 truncate font-semibold">{row.label}</span>
-              <span className="shrink-0 text-muted"><strong className="text-foreground">{row.buyers}</strong> buyer · <strong className="text-foreground">{row.listings}</strong> listing</span>
+              <span className="dashboard-opportunity-counts"><span className="dashboard-buyer-count"><Users className="size-3.5" aria-hidden="true" /><strong>{number(row.buyers)}</strong> buyer</span><span className="dashboard-listing-count"><Boxes className="size-3.5" aria-hidden="true" /><strong>{number(row.listings)}</strong> listing</span></span>
             </div>
             <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-default" role="presentation">
               <div className="h-full rounded-full" style={{ width: `${Math.max(6, (row.buyers / top) * 100)}%`, background: row.pressure >= 2 ? colors.red : row.pressure >= 1.2 ? colors.amber : colors.green }} />
