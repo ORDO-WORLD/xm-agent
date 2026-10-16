@@ -11,7 +11,7 @@ from access import permissions
 from auth import _password_hash, current_user
 from db import connect
 from stock import tracked_phones
-from tenant import owner_id, provision_company, workspace_id
+from tenant import provision_company, workspace_id
 from runtime_cache import invalidate_stats
 
 router = APIRouter()
@@ -42,7 +42,9 @@ def get_company_settings(request: Request):
     user = current_user(request)
     with connect() as conn:
         company = company_row(conn)
-        mine = personal_terms(conn, owner_id() or user['id'])
+        link = conn.execute('SELECT autoaudit_company_id FROM xm.app_preferences WHERE company_id=%s', (workspace_id(),)).fetchone()
+        principal = conn.execute("SELECT is_locked FROM xm.users WHERE workspace_id=%s AND autoaudit_key LIKE 'company:%%' LIMIT 1", (workspace_id(),)).fetchone()
+        mine = personal_terms(conn, user['id'])
         phones = tracked_phones(conn, workspace_id())
     if request.method == 'GET' and user['role'] == 'admin' and user.get('workspace_id') != workspace_id():
         # The screen loads this when the administrator steps into a company.
@@ -53,7 +55,9 @@ def get_company_settings(request: Request):
         'search_locked': company['search_locked'], 'search_terms': company['search_terms'],
         'personal_terms': mine, 'effective_terms': effective_terms(user['role'], company, mine),
         'tracked_phones': phones, 'role': user['role'], 'permissions': permissions(user['role'], company['search_locked']),
-        'managed_by_autoaudit': workspace_id().startswith('aa-'),
+        'managed_by_autoaudit': bool(link and link['autoaudit_company_id']),
+        'autoaudit_company_id': link['autoaudit_company_id'] if link else None,
+        'company_locked': bool(principal and principal['is_locked']),
     }
 
 

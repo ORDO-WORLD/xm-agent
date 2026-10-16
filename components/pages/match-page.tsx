@@ -75,11 +75,7 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
       if (prefs.statuses?.length && !fromLink) setFilters((current) => ({ ...current, temps: prefs.statuses }));
     }).catch(() => {}).finally(() => setPrefsReady(true));
   }, [api, urlDirection, fromLink]);
-  useEffect(() => {
-    if (!prefsReady || fromLink) return;
-    const timer = window.setTimeout(() => { void api.put('/preferences', { direction, statuses: filters.temps.length ? filters.temps : ['hot', 'warm'] }).catch(() => {}); }, 500);
-    return () => window.clearTimeout(timer);
-  }, [api, direction, filters.temps, prefsReady, fromLink]);
+  // Defaults are managed in AutoAudit; working filters here stay local to this view.
 
   const groupBy: GroupBy = company?.listing_group_by ?? 'sender';
   const salesMode = company?.matching_mode === 'sales';

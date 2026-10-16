@@ -77,7 +77,16 @@ if __name__ == "__main__":
         conn.commit()
     reset_stuck()
     purged_at = 0.0
+    relayed_at = 0.0
     while True:
+        if time.monotonic() - relayed_at >= 60 or not relayed_at:
+            relayed_at = time.monotonic()
+            try:
+                from property_activity import relay_batch, purge_sessions
+                relay_batch()
+                purge_sessions()
+            except Exception as exc:
+                print(f'Property activity delivery deferred: {type(exc).__name__}', flush=True)
         if time.monotonic() - purged_at > 86400 or not purged_at:
             # Once a day, a batch at a time: "merely looked at" lines past their retention period.
             purged_at = time.monotonic()

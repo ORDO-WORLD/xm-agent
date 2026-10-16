@@ -54,6 +54,7 @@ export default defineConfig(async () => {
         '/api': {
           target: process.env.XM_API_URL ?? 'http://127.0.0.1:8100',
           changeOrigin: true,
+          xfwd: true,
           rewrite: (path: string) => path.replace(/^\/api/, ''),
         },
       },

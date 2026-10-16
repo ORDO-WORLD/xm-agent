@@ -6,6 +6,7 @@ merely look at go through ``record_view``, which never gets in their way.
 Nothing here may receive passwords, API keys, tokens or chat contents.
 """
 import json
+import uuid
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -46,6 +47,17 @@ ACTIONS = {
 }
 STATUS_LABEL = {'ready': 'Ready', 'on_hold': 'On-hold', 'sold': 'Sold', 'deleted': 'Dihapus'}
 ROLE_LABEL = {'user': 'anggota', 'company_admin': 'admin company', 'admin': 'administrator'}
+_control = ContextVar('property_activity_control', default=None)
+ACTIONS.update({'preferences.save': 'Preferensi pribadi', 'workflow.key': 'API key workflow'})
+
+
+@contextmanager
+def control_scope(context):
+    token = _control.set(context)
+    try:
+        yield
+    finally:
+        _control.reset(token)
 
 
 @contextmanager
@@ -109,12 +121,24 @@ def record(conn, layer, action, summary, details=None, *, failed=False, company_
             (1 if bump else 0, action, summary, who['id'], who.get('email'), company)).fetchone()
         if merged:
             return merged['id']
+    context = _control.get()
+    event_id, delivery_state = None, None
+    event_details = dict(details or {})
+    if context and context.get('auditEligible') and context['actor']['role'] == 'company' and layer in ('change', 'account') and not failed:
+        event_id = uuid.uuid5(uuid.UUID(context['eventId']), action)
+        delivery_state = 'pending'
+        # The AA sink receives field names and stable identity, never values or secrets.
+        event_details['_autoaudit'] = {'company_id': context['companyId'],
+                                      'superior_id': context['actor']['actorId'] if context['actor']['actorType'] == 'superior' else None,
+                                      'operation': action,
+                                      'changed_fields': [key for key in (details or {}) if key.isascii() and key.replace('_', '').replace('.', '').isalnum()][:30],
+                                      'target_ids': {key: value for key, value in (details or {}).items() if key in ('key_id', 'user_id', 'id_sales', 'sales_id', 'source_id') and (isinstance(value, int) or isinstance(value, str))}}
     return conn.execute(
         """INSERT INTO xm.activity_log(layer, action, actor_id, actor_name, actor_email, actor_role, company_id, company_name,
-                                       as_admin, failed, summary, details)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) RETURNING id""",
+                                       as_admin, failed, summary, details, autoaudit_event_id, autoaudit_delivery_state)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s) RETURNING id""",
         (layer, action, who['id'], who.get('display_name') or who.get('email') or 'Tidak dikenal', who.get('email'), who.get('role'),
-         company, name, bool(who.get('as_admin')), failed, summary, json.dumps(_trim(details or {}), default=str))).fetchone()['id']
+         company, name, bool(who.get('as_admin')), failed, summary, json.dumps(_trim(event_details), default=str), event_id, delivery_state)).fetchone()['id']
 
 
 def record_now(layer, action, summary, details=None, **options):

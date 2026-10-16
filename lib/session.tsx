@@ -5,6 +5,7 @@ import { LOCKED_EVENT, UNAUTHORIZED_EVENT } from '@/lib/api';
 import type { CompanySettings, Stats, User } from '@/lib/types';
 import { useApi, WorkspaceProvider } from '@/lib/workspace-context';
 import { resetTeamGuideSession } from '@/lib/team-guide-hint';
+import { actorKey, startUrl } from '@/lib/account-sync.mjs';
 
 /* ------------------------------------------------------------------ session */
 
@@ -21,16 +22,12 @@ export function useSession() {
 }
 
 /* An AutoAudit session lasts 15 minutes; when it ends the browser goes back through AutoAudit by itself. */
-const SSO_KEY = 'xm.sso';
-function rememberSso(on: boolean) {
-  try { if (on) window.localStorage.setItem(SSO_KEY, '1'); else window.localStorage.removeItem(SSO_KEY); } catch { /* private mode */ }
-}
+let syncingAccount = false;
 function renewThroughAutoAudit() {
-  try { if (window.localStorage.getItem(SSO_KEY) !== '1') return false; } catch { return false; }
-  // Cleared first: if AutoAudit refuses, coming back shows the sign-in screen instead of looping.
-  rememberSso(false);
-  window.location.assign('/api/auth/sso/start');
-  return true;
+  if (syncingAccount) return;
+  syncingAccount = true;
+  try { window.sessionStorage.setItem('xm.account-sync', '1'); } catch { /* navigation type also prevents redirect loops */ }
+  window.location.replace(startUrl(window.location.hash));
 }
 
 async function fetchMe() {
@@ -46,23 +43,35 @@ export function useAuth() {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    let alive = true;
+    let pending = false;
+    try { pending = window.sessionStorage.getItem('xm.account-sync') === '1'; } catch { /* private mode */ }
+    if (!pending && performance.getEntriesByType('navigation')[0]?.toJSON().type === 'reload') {
+      renewThroughAutoAudit();
+      return;
+    }
     const settle = (next: User | null) => {
-      if (next) rememberSso(Boolean(next.sso));
-      else { resetTeamGuideSession(); if (renewThroughAutoAudit()) return; }
+      if (!alive) return;
+      if (!next) { resetTeamGuideSession(); renewThroughAutoAudit(); return; }
+      try {
+        const key = actorKey(next);
+        if (window.sessionStorage.getItem('xm.actor') !== key) {
+          window.sessionStorage.removeItem(MANAGE_KEY);
+          resetTeamGuideSession();
+        }
+        window.sessionStorage.setItem('xm.actor', key);
+        window.sessionStorage.removeItem('xm.account-sync');
+      } catch { /* private mode */ }
+      syncingAccount = false;
       setUser(next);
     };
-    const refresh = () => { void fetchMe().then((next) => { settle(next); setFailed(false); }).catch(() => {}); };
-    void fetchMe().then(settle).catch(() => { setFailed(true); setUser(null); });
-    // A locked or unlocked account must be noticed quickly, without a reload.
-    const timer = window.setInterval(refresh, 5000);
+    void fetchMe().then(settle).catch(() => { if (alive) { setFailed(true); setUser(null); } });
     const onUnauthorized = () => settle(null);
     const onLocked = () => setUser((current) => (current ? { ...current, is_locked: true } : current));
-    window.addEventListener('focus', refresh);
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     window.addEventListener(LOCKED_EVENT, onLocked);
     return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('focus', refresh);
+      alive = false;
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
       window.removeEventListener(LOCKED_EVENT, onLocked);
     };
@@ -71,8 +80,10 @@ export function useAuth() {
   const logout = useCallback(() => {
     resetTeamGuideSession();
     try { window.sessionStorage.removeItem(MANAGE_KEY); } catch { /* private mode */ }
-    rememberSso(false);
-    void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => { window.location.hash = ''; setUser(null); });
+    void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).then((response) => {
+      if (!response.ok) throw new Error('Logout Property belum berhasil. Coba lagi.');
+      window.location.assign('/api/auth/sso/signed-out');
+    }).catch(() => window.alert('Logout Property belum berhasil. Coba lagi.'));
   }, []);
   return { user, setUser, logout, failed };
 }

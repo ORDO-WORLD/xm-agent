@@ -15,15 +15,18 @@ Di web/nginx, semua alamat API memakai prefix `/api`. Jika mengakses FastAPI
 langsung (port 8000), hilangkan prefix `/api`. Gunakan satu base URL agar
 `download_url` relatif dari manifest dapat diselesaikan ke host yang sama.
 
-Admin company atau admin platform membuat token melalui sesi login yang aktif:
+Company/Superadmin membuat token di **AutoAudit → Pengaturan Property → Integrasi workflow**. Browser memanggil proxy AA; cookie XM langsung tidak lagi berwenang mengelola key:
 
 ```http
-POST /api/integration/keys
+POST /api/property/settings/keys?company_id=<id-company>
 Content-Type: application/json
-Cookie: xm_session=<sesi-admin>
+Cookie: vauth=<sesi-autoaudit>
+Origin: https://<origin-autoaudit>
 
 {"name":"Workflow Builder"}
 ```
+
+AA meneruskan request ke `/api/integration/keys` XM memakai tiket server-only `property-control` yang mengikat actor/Company/method/path/body. Key workflow tetap hanya untuk export routes. Daftar key di proxy AA memakai `offset`, 50 row/halaman dan `has_more`; secret tampil sekali. Rename/konfirmasi/revoke melalui AA. Kontrak job export di bawah tetap pada API Property.
 
 Respons `201` berisi `id`, `token`, `scope: "property:export"`, `company_id`,
 `name`, dan `created_at`. Simpan `token` di penyimpanan kredensial workflow.

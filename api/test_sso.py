@@ -28,7 +28,7 @@ class FakeResponse(io.BytesIO):
 
 class SsoClientTests(unittest.TestCase):
     def test_identity_key_is_stable_per_account_kind(self):
-        self.assertEqual(sso.identity_key({'role': 'company', 'companyId': 12, 'actorType': 'company'}), 'company:12')
+        self.assertEqual(sso.identity_key({'role': 'company', 'companyId': 12, 'actorType': 'company', 'actorId': 12}), 'company:12')
         self.assertEqual(sso.identity_key({'role': 'superadmin', 'actorType': 'superadmin', 'actorId': None}), 'superadmin:root')
         self.assertEqual(sso.identity_key({'role': 'superadmin', 'actorType': 'child_superadmin', 'actorId': 7}), 'superadmin:7')
         for actor in ({'role': 'company'}, {'role': 'company', 'companyId': '12'}, {'role': 'superadmin', 'actorType': 'child_superadmin'},

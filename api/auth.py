@@ -4,6 +4,9 @@ import os
 import secrets
 import time
 import uuid
+import re
+from html import escape
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -83,7 +86,7 @@ def current_user(request: Request):
         user = conn.execute(
             """
             SELECT u.id, u.email, u.display_name, u.role, u.is_locked, u.workspace_id, ap.company_name,
-                   u.autoaudit_key, s.id AS session_id, s.sso_ticket
+                   u.autoaudit_key, ap.autoaudit_company_id, s.id AS session_id, s.sso_ticket
             FROM xm.sessions s JOIN xm.users u ON u.id=s.user_id
             LEFT JOIN xm.app_preferences ap ON ap.company_id=u.workspace_id
             WHERE s.token_hash=%s AND s.expires_at > now()
@@ -92,61 +95,32 @@ def current_user(request: Request):
         ).fetchone()
         if not user:
             return None
-        # The ticket and the internal keys stay on the server.
-        ticket, session_id, key = user.pop('sso_ticket'), user.pop('session_id'), user.pop('autoaudit_key')
-        user['sso'] = bool(ticket)
-        if ticket and not _still_valid(ticket, key):
+    # Never keep a PostgreSQL connection open while waiting for the other application.
+    ticket, session_id, key = user.pop('sso_ticket'), user.pop('session_id'), user.pop('autoaudit_key')
+    company_id = user.pop('autoaudit_company_id')
+    user['sso'] = bool(ticket)
+    if not ticket or not _still_valid(ticket, key, user['role'], company_id):
+        with connect() as conn:
             conn.execute('DELETE FROM xm.sessions WHERE id=%s', (session_id,))
             conn.commit()
-            return None
-        return user
+        return None
+    user['autoaudit_url'] = sso.public_url(request.cookies.get('xm_autoaudit_origin', ''))
+    return user
 
 
-def _still_valid(ticket: str, key: str) -> bool:
+def _still_valid(ticket: str, key: str, role=None, company_id=None) -> bool:
     """Ask AutoAudit again; sso.Unavailable passes through so an outage does not look like a sign-out."""
     answer = sso.exchange(ticket)
     try:
-        return bool(answer) and sso.identity_key(answer['actor']) == key
+        actor = answer['actor'] if answer else None
+        return bool(actor) and sso.identity_key(actor) == key and (role is None or sso.actor_role(actor) == role) and (actor['role'] == 'superadmin' or actor['companyId'] == company_id)
     except (KeyError, TypeError, ValueError):
         return False
 
 
 @router.post("/login")
 def login(payload: LoginRequest, response: Response):
-    email = payload.email.strip().lower()
-    with connect() as conn:
-        user = conn.execute(
-            """SELECT u.*, ap.company_name FROM xm.users u
-               LEFT JOIN xm.app_preferences ap ON ap.company_id=u.workspace_id WHERE u.email=%s""", (email,)).fetchone()
-        # An AutoAudit account only enters through AutoAudit, even if a password was ever set on it.
-        if not user or user["autoaudit_key"] or not _password_matches(payload.password, user["password_hash"]):
-            # Only the address that was tried is kept; the password never reaches the log.
-            who = {'id': user['id'] if user else None, 'display_name': user['display_name'] if user else email,
-                   'email': email, 'role': user['role'] if user else None}
-            activity.record(conn, 'account', 'auth.login_failed',
-                            f'gagal masuk dengan email {email} ({"password salah" if user else "akun tidak ada"})',
-                            {'email': email}, failed=True, actor=who, company_id=user['workspace_id'] if user else None, merge=True)
-            conn.commit()
-            raise HTTPException(401, "Email atau password tidak sesuai")
-        token = secrets.token_urlsafe(32)
-        expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
-        conn.execute("DELETE FROM xm.sessions WHERE expires_at <= now()")
-        conn.execute(
-            "INSERT INTO xm.sessions(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)",
-            (uuid.uuid4(), user["id"], hashlib.sha256(token.encode()).hexdigest(), expires_at),
-        )
-        activity.record(conn, 'account', 'auth.login', 'masuk', actor=user, company_id=user['workspace_id'])
-        conn.commit()
-    response.set_cookie(
-        COOKIE_NAME,
-        token,
-        max_age=SESSION_DAYS * 86400,
-        httponly=True,
-        samesite="strict",
-        secure=os.getenv("XM_COOKIE_SECURE", "0") == "1",
-        path="/",
-    )
-    return public_user(user)
+    raise HTTPException(403, 'Gunakan login AutoAudit.')
 
 
 @router.get("/me")
@@ -166,7 +140,7 @@ def logout(request: Request, response: Response):
                 "DELETE FROM xm.sessions WHERE token_hash=%s",
                 (hashlib.sha256(token.encode()).hexdigest(),),
             )
-            user = current_user(request)
+            user = getattr(request.state, 'xm_user', None)
             if user:
                 activity.record(conn, 'account', 'auth.logout', 'keluar', actor=user, company_id=user['workspace_id'])
             conn.commit()
@@ -189,16 +163,30 @@ def sso_config():
     return {'enabled': sso.enabled()}
 
 
+def safe_return(value):
+    return value if re.fullmatch(r'/#/(?:beranda|cocokkan|match-baru|stok|data|tim|pengaturan|perusahaan|aktivitas)(?:\?[^#\r\n]*)?', value or '') else '/'
+
+
 @router.get('/sso/start')
-def sso_start():
+def sso_start(request: Request):
     if not sso.enabled():
         return _sso_failed(503, 'Login lewat AutoAudit belum diaktifkan.')
+    canonical = os.getenv('XM_PUBLIC_BASE_URL', '').strip().rstrip('/')
+    browser_host = request.headers.get('x-forwarded-host', request.url.netloc).split(',')[0].strip()
+    browser_scheme = request.headers.get('x-forwarded-proto', request.url.scheme).split(',')[0].strip()
+    if canonical and f'{browser_scheme}://{browser_host}' != canonical:
+        return RedirectResponse(canonical + '/api/auth/sso/start?' + urlencode({'next': safe_return(request.query_params.get('next', '/')), 'from': request.query_params.get('from', '')}), status_code=302)
+    origin = sso.public_url(request.query_params.get('from') or request.cookies.get('xm_autoaudit_origin', ''))
     state = secrets.token_hex(32)
-    response = RedirectResponse(f'{sso.public_url()}/dashboard/property?state={state}', status_code=302,
+    response = RedirectResponse(f'{origin}/dashboard/property?state={state}', status_code=302,
                                 headers={'Cache-Control': 'no-store'})
     # Lax: the browser must send it back when AutoAudit redirects to the callback.
     response.set_cookie(STATE_COOKIE, state, max_age=600, httponly=True, samesite='lax',
                         secure=os.getenv('XM_COOKIE_SECURE', '0') == '1', path=STATE_PATH)
+    response.set_cookie('xm_sso_return', safe_return(request.query_params.get('next', '/')), max_age=600, httponly=True, samesite='lax', path=STATE_PATH, secure=os.getenv('XM_COOKIE_SECURE', '0') == '1')
+    response.set_cookie('xm_autoaudit_origin', origin, max_age=30*86400, httponly=True, samesite='lax', secure=os.getenv('XM_COOKIE_SECURE', '0') == '1')
+    if request.cookies.get(COOKIE_NAME):
+        response.set_cookie(COOKIE_NAME, request.cookies[COOKIE_NAME], max_age=900, httponly=True, samesite='lax', secure=os.getenv('XM_COOKIE_SECURE', '0') == '1')
     return response
 
 
@@ -222,24 +210,44 @@ def sso_callback(request: Request, ticket: str = ''):
         fresh = False
     if not fresh or expires <= time.time() * 1000:
         return _sso_failed(401, expired)
-    token = secrets.token_urlsafe(32)
+    token = request.cookies.get(COOKIE_NAME) or secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
     with connect() as conn:
+        old = conn.execute('SELECT s.id,u.autoaudit_key,u.workspace_id FROM xm.sessions s JOIN xm.users u ON u.id=s.user_id WHERE s.token_hash=%s', (token_hash,)).fetchone()
         user = sso.provision_identity(conn, actor)
+        same_actor = bool(old and old['autoaudit_key'] == sso.identity_key(actor) and old['workspace_id'] == user['workspace_id'])
+        if old and not same_actor:
+            conn.execute('DELETE FROM xm.sessions WHERE id=%s', (old['id'],))
+        if not same_actor:
+            token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+        expires_at = datetime.fromtimestamp(expires / 1000, timezone.utc)
+        if same_actor:
+            conn.execute('UPDATE xm.sessions SET expires_at=%s,sso_ticket=%s WHERE id=%s', (expires_at, ticket, old['id']))
+        else:
+            conn.execute('INSERT INTO xm.sessions(id,user_id,token_hash,expires_at,sso_ticket) VALUES(%s,%s,%s,%s,%s)',
+                         (uuid.uuid4(), user['id'], token_hash, expires_at, ticket))
         conn.execute("DELETE FROM xm.sessions WHERE expires_at <= now()")
-        conn.execute(
-            "INSERT INTO xm.sessions(id,user_id,token_hash,expires_at,sso_ticket) VALUES(%s,%s,%s,%s,%s)",
-            (uuid.uuid4(), user['id'], hashlib.sha256(token.encode()).hexdigest(),
-             datetime.fromtimestamp(expires / 1000, timezone.utc), ticket))
         conn.commit()
-    response = RedirectResponse('/', status_code=302, headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+    destination = safe_return(request.cookies.get('xm_sso_return', '/')) if same_actor else '/'
+    response = RedirectResponse(destination, status_code=302, headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
     response.set_cookie(COOKIE_NAME, token, max_age=max(1, int(expires / 1000 - time.time())), httponly=True,
-                        samesite='strict', secure=os.getenv('XM_COOKIE_SECURE', '0') == '1', path='/')
+                        samesite='lax', secure=os.getenv('XM_COOKIE_SECURE', '0') == '1', path='/')
     response.delete_cookie(STATE_COOKIE, path=STATE_PATH)
+    response.delete_cookie('xm_sso_return', path=STATE_PATH)
     return response
 
 
 def public_user(user):
     return {key: user.get(key) for key in ('id', 'email', 'display_name', 'role', 'is_locked', 'company_name', 'sso')}
+
+
+@router.get('/sso/signed-out')
+def signed_out(request: Request):
+    if not sso.enabled():
+        return _sso_failed(503, 'Alamat AutoAudit belum dikonfigurasi untuk logout.')
+    target = escape(sso.public_url(request.cookies.get('xm_autoaudit_origin', '')) + '/logout?from=property', quote=True)
+    return HTMLResponse(f'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={target}"><title>Keluar</title><p>Sesi Property ditutup.</p><a href="{target}">Lanjutkan logout AutoAudit</a>', headers={'Cache-Control': 'no-store'})
 
 
 class PasswordChange(BaseModel):
@@ -249,15 +257,4 @@ class PasswordChange(BaseModel):
 
 @router.put('/password', status_code=204)
 def change_password(payload: PasswordChange, request: Request):
-    user = current_user(request)
-    with connect() as conn:
-        row = conn.execute('SELECT password_hash FROM xm.users WHERE id=%s FOR UPDATE', (user['id'],)).fetchone()
-        if not row or not _password_matches(payload.current_password, row['password_hash']):
-            raise HTTPException(400, 'Password saat ini tidak sesuai')
-        conn.execute('UPDATE xm.users SET password_hash=%s WHERE id=%s', (_password_hash(payload.new_password), user['id']))
-        token = request.cookies.get(COOKIE_NAME) or ''
-        # Other devices must sign in again with the new password; this session continues.
-        conn.execute('DELETE FROM xm.sessions WHERE user_id=%s AND token_hash<>%s',
-                     (user['id'], hashlib.sha256(token.encode()).hexdigest()))
-        activity.record(conn, 'account', 'auth.password', 'mengganti password sendiri', actor=user, company_id=user['workspace_id'])
-        conn.commit()
+    raise HTTPException(403, 'Password dikelola melalui AutoAudit.')

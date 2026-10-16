@@ -7,7 +7,6 @@ import { BarsChart, Sparkline } from '@/components/charts/charts';
 import { colors } from '@/components/charts/chart-setup';
 import { EmptyState, ErrorNotice, LoadingIndicator, LoadingRows } from '@/components/app/primitives';
 import { SalesListingsModal } from '@/components/app/sales-listings-modal';
-import { TrackedEditor } from '@/components/app/tracked-editor';
 import { RangeButton, type Period } from '@/components/app/period-picker';
 import { errorMessage, query } from '@/lib/api';
 import { cleanName, dateTime, formatPhone, initials, number, relativeDate, shiftDay, todayWib } from '@/lib/format';
@@ -38,7 +37,6 @@ export default function StockPage({ navigate }: { navigate?: Navigate }) {
   const { company, refresh } = useCompany();
   const canEdit = !!company?.permissions.manage_settings;
   const [tick, setTick] = useState(0);
-  const editor = useOverlayState();
   const listings = useOverlayState();
   const [viewing, setViewing] = useState<StockTracked | null>(null);
   const [phone, setPhone] = useState('');
@@ -124,7 +122,7 @@ export default function StockPage({ navigate }: { navigate?: Navigate }) {
         <div className="stock-header-actions">
           {tab === 'list' ? <>
             {tracked.length > 0 && <Button variant="secondary" isPending={downloading === 'all'} isDisabled={!!downloading} onPress={() => download()}><Download className="size-4" aria-hidden="true" />Download semua</Button>}
-            {canEdit && <Button onPress={() => editor.open()}><PhoneCall className="size-4" aria-hidden="true" />Atur nomor sales</Button>}
+            {canEdit && <Button onPress={() => navigate?.('pengaturan', { tab: 'sales' })}><PhoneCall className="size-4" aria-hidden="true" />Atur nomor di AutoAudit</Button>}
           </> : canEdit && <Button variant="secondary" isPending={snapshotBusy} isDisabled={!tracked.length} onPress={snapshot}><ClipboardList className="size-4" aria-hidden="true" />Catat sekarang</Button>}
         </div>
       </div>
@@ -143,7 +141,7 @@ export default function StockPage({ navigate }: { navigate?: Navigate }) {
             <summary.icon className="stock-summary-icon" aria-hidden="true" />
           </article>)}
         </div>}
-        {overview.data && tracked.length === 0 && <EmptyState compact animation="searching" title="Belum ada nomor sales yang dipantau" description={canEdit ? 'Tambahkan nomor sales untuk mulai memantau stok listing perusahaan.' : 'Super admin company dapat menambahkan nomor sales yang ingin dipantau.'} action={canEdit ? <Button onPress={() => editor.open()}><Plus className="size-4" />Tambah nomor sales</Button> : undefined} />}
+        {overview.data && tracked.length === 0 && <EmptyState compact animation="searching" title="Belum ada nomor sales yang dipantau" description="Company dapat mengatur nomor yang dipantau melalui AutoAudit." action={canEdit ? <Button onPress={() => navigate?.('pengaturan', { tab: 'sales' })}><Plus className="size-4" />Atur di AutoAudit</Button> : undefined} />}
         {tracked.length > 0 && <ul className="team-member-grid">{tracked.map((item) => <SalesCard key={item.phone} item={item} onOpen={() => { setViewing(item); listings.open(); }} onDownload={() => download(item)} downloading={downloading === item.phone} busy={!!downloading} />)}</ul>}
       </Tabs.Panel>
       <Tabs.Panel id="analytic">
@@ -185,7 +183,6 @@ export default function StockPage({ navigate }: { navigate?: Navigate }) {
       </Tabs.Panel>
     </Tabs>
     <SalesListingsModal state={listings} phone={viewing?.phone ?? ''} name={viewing ? salesName(viewing) : ''} />
-    <TrackedEditor state={editor} current={tracked} onSaved={() => { setTick((value) => value + 1); refresh(); }} />
   </div>;
 }
 

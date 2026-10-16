@@ -501,3 +501,15 @@ CREATE INDEX IF NOT EXISTS activity_log_merge_idx ON xm.activity_log(action, act
 -- and the ticket a session is re-checked with on every request (NULL = a password session).
 ALTER TABLE xm.users ADD COLUMN IF NOT EXISTS autoaudit_key text UNIQUE;
 ALTER TABLE xm.sessions ADD COLUMN IF NOT EXISTS sso_ticket text;
+
+-- Property control writes keep their relay event in the same transaction as the setting.
+ALTER TABLE xm.activity_log ADD COLUMN IF NOT EXISTS autoaudit_event_id uuid UNIQUE;
+ALTER TABLE xm.activity_log ADD COLUMN IF NOT EXISTS autoaudit_delivery_state text
+ CHECK (autoaudit_delivery_state IN ('pending','sent'));
+CREATE INDEX IF NOT EXISTS activity_autoaudit_pending_idx ON xm.activity_log(id)
+ WHERE autoaudit_delivery_state='pending';
+-- Conflicting legacy mappings must be reconciled explicitly before applying these indexes.
+CREATE UNIQUE INDEX IF NOT EXISTS app_preferences_autoaudit_company_unique ON xm.app_preferences(autoaudit_company_id)
+ WHERE autoaudit_company_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_company_principal_unique ON xm.users(workspace_id)
+ WHERE autoaudit_key LIKE 'company:%';

@@ -17,6 +17,7 @@ export type User = {
   workspace_id?: string | null;
   /** Signed in through AutoAudit; the session is renewed there, not with a password. */
   sso?: boolean;
+  autoaudit_url?: string;
 };
 
 export type Permissions = {
@@ -42,6 +43,7 @@ export type CompanySettings = {
   permissions: Permissions;
   /** The company and its accounts come from AutoAudit; members cannot be added here. */
   managed_by_autoaudit?: boolean;
+  autoaudit_company_id?: number | null;
 };
 
 /** A buyer or listing card: one unique text, with every posting folded into it. */
