@@ -47,3 +47,6 @@ next-env.d.ts
 .venv/
 # Local API credentials
 /secret.md
+
+# Internal API handbook contains the private deployment key
+/endpoint.html

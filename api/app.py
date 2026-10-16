@@ -24,6 +24,7 @@ from qdrant import status as qdrant_status
 from access import PUBLIC_PATHS, SESSION_PATHS, required_role, role_allows
 from auth import current_user, router as auth_router, seed_admin
 from integration import authenticate as integration_authenticate, is_export_path, is_import_path, router as integration_router
+from internal_api import authenticate as internal_authenticate
 from entities import migrate_v4
 from runtime_cache import cached_stats
 from matching_scope import document_scope_filter, history_scope_filter
@@ -63,6 +64,18 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
+    scheme, _, bearer = request.headers.get('Authorization', '').partition(' ')
+    if scheme.lower() == 'bearer' and bearer.startswith('xm_internal_'):
+        try:
+            internal = internal_authenticate(request)
+        except HTTPException as exc:
+            return JSONResponse({'detail': exc.detail}, status_code=exc.status_code)
+        request.state.xm_user = internal['user']
+        with workspace_scope(internal['company_id'], internal['user']['id']):
+            response = await call_next(request)
+            response.headers['Cache-Control'] = 'private, no-store'
+            response.headers['Vary'] = 'Authorization, X-XM-Company-Id'
+            return response
     if is_export_path(path) or is_import_path(path):
         try:
             key = integration_authenticate(request)
