@@ -88,9 +88,10 @@ body {
 .company-sidebar { display: none; }
 .company-sidebar-brand { position: relative; flex-shrink: 0; padding: 1rem 0.75rem 0.5rem; }
 .company-sidebar-brand-row { display: flex; min-height: 3rem; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.company-sidebar-logo { min-width: 0; padding: 6px 4px; cursor: pointer; }
-.company-sidebar-logo img { max-width: 100%; }
-.company-product-badge { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin: 0.5rem 0 0 4px; padding: 0.25rem 0.75rem; border-radius: 9999px; background: #1d4ed8; color: #fff; font-size: 11px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+.company-sidebar-logo { display: flex; flex: 1; align-items: center; justify-content: flex-start; min-width: 0; padding: 6px 4px; cursor: pointer; }
+.company-sidebar-logo img { width: 100px; height: auto; max-width: 100%; }
+.company-sidebar-collapsed .company-sidebar-logo { justify-content: center; }
+.company-sidebar-collapsed .company-sidebar-logo img { width: auto; height: 40px; }
 .company-sidebar-toggle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 1.5rem; height: 1.5rem; padding: 4px; border-radius: 9999px; color: #9ca3af; cursor: pointer; }
 .company-sidebar-toggle:hover { background: #f3f4f6; color: #374151; }
 .company-sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 0 0.5rem 0.5rem; scrollbar-width: none; }
@@ -1012,9 +1013,10 @@ body:has(.integration-revoke-dialog) .settings-tabs .tabs__panel { overflow:hidd
 .dashboard-summary-grid > div > div { height:100%; }
 .dashboard-summary { height:100%; gap:12px; padding:14px 16px; border-radius:8px; }
 .dashboard-summary-count { display:flex; flex-direction:column; flex-shrink:0; align-items:flex-start; gap:5px; }
-.dashboard-summary-change { display:inline-flex; align-items:center; gap:4px; background:none; padding:0; color:#64748b; font-size:11px; font-weight:500; white-space:nowrap; }
-.dashboard-change-up { color:#059669; }
-.dashboard-change-down { color:#dc2626; }
+.dashboard-summary-change { display:inline-flex; align-items:center; gap:4px; padding:0 6px; border-radius:9999px; font-size:11px; line-height:16px; font-weight:500; white-space:nowrap; }
+.dashboard-summary-change > span:first-child { display:inline-flex; align-items:center; }
+.dashboard-change-up { background:#ecfdf5; color:#059669; }
+.dashboard-change-down { background:#fef2f2; color:#dc2626; }
 .dashboard-summary .stock-summary-label { padding-left:12px; }
 .dashboard-summary .stock-summary-value { font-size:28px; }
 .dashboard-summary .stock-summary-icon { width:26px; height:26px; }

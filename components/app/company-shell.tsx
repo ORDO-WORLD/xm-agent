@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { AlertDialog, Avatar, Button, Drawer, Dropdown, Label, useOverlayState } from '@heroui/react';
 import Image from 'next/image';
-import { ArrowLeft, Boxes, Building2, ChevronDown, ChevronsLeft, ChevronsRight, House, LayoutDashboard, LogOut, Menu, Search, ScrollText, Settings, Sparkles, UploadCloud, Users, Workflow, X } from 'lucide-react';
+import { ArrowLeft, Boxes, Building2, ChevronDown, ChevronsLeft, ChevronsRight, LayoutDashboard, LogOut, Menu, Search, ScrollText, Settings, Sparkles, UploadCloud, Users, Workflow, X } from 'lucide-react';
 import { initials } from '@/lib/format';
 import type { Navigate } from '@/lib/router';
 import { useCompany, useManage, useSession } from '@/lib/session';
@@ -135,13 +135,12 @@ export function CompanyShell({ route, navigate, children }: { route: string; nav
           <div className="company-sidebar-brand-row">
             <button type="button" onClick={() => go('beranda')} aria-label="Ke Beranda" className="company-sidebar-logo">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={collapsed ? '/brand-auto-audit-icon.png' : '/brand-auto-audit.png'} alt="AutoAudit" className="h-10 w-auto object-contain" />
+              <img src={collapsed ? '/brand-auto-audit-icon.png' : '/brand-agent-developer.png'} alt="AutoAudit · Agent Developer" className="object-contain" />
             </button>
             <button type="button" className="company-sidebar-toggle" onClick={toggle} aria-label={collapsed ? 'Perluas sidebar' : 'Kecilkan sidebar'} aria-expanded={!collapsed}>
               {collapsed ? <ChevronsRight className="size-4" /> : <ChevronsLeft className="size-4" />}
             </button>
           </div>
-          {!collapsed && <span className="company-product-badge"><House size={16} className="shrink-0" aria-hidden="true" />Agent Developer</span>}
         </div>
         <nav className="company-sidebar-nav" aria-label="Menu utama">{links(collapsed, 'desktop')}</nav>
       </aside>

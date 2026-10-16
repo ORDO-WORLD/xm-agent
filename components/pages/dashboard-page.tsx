@@ -91,7 +91,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
       <section aria-label="Pilih periode" className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
           <div className="flex items-center gap-2 text-base font-bold"><CalendarRange className="size-5 text-accent" aria-hidden="true" />Periode yang dilihat</div>
-          {data && <p className="text-sm text-muted">{data.period.label}: <strong className="text-foreground">{prettyRange(data.period.date_from, data.period.date_to)}</strong> · dibandingkan dengan {prettyRange(data.period.compare_from, data.period.compare_to)}</p>}
+          {data && <p className="text-sm text-muted">{period.preset === 'custom' ? 'Pilih Tanggal' : data.period.label}: <strong className="text-foreground">{prettyRange(data.period.date_from, data.period.date_to)}</strong> dibandingkan dengan {prettyRange(data.period.compare_from, data.period.compare_to)}</p>}
         </div>
         <PeriodPicker
           className="dashboard-periods" value={period}
@@ -118,8 +118,8 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
       {data && (
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-3 text-base">
           <span className="font-semibold">Demand buyer unik:</span>
-          <Chip color="accent" variant="soft" size="lg">Minggu ini · {number(data.quick.this_week)}</Chip>
-          <Chip color="accent" variant="soft" size="lg">Bulan ini · {number(data.quick.this_month)}</Chip>
+          <Chip color="accent" variant="soft" size="lg">Minggu ini: {number(data.quick.this_week)}</Chip>
+          <Chip color="accent" variant="soft" size="lg">Bulan ini: {number(data.quick.this_month)}</Chip>
         </div>
       )}
 
@@ -214,7 +214,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
 
 function DashboardStat({ label, value, icon, color, change, hint, loading }: { label: string; value: number; icon: ReactNode; color: string; change?: number | null; hint?: string; loading?: boolean }) {
   return <article className="stock-summary dashboard-summary" style={{ '--stock-summary-color': color } as CSSProperties}>
-    <div className="dashboard-summary-count">{loading ? <Skeleton className="h-8 w-14 rounded-md" /> : <><strong className="stock-summary-value"><NumberTicker value={value} key={value} /></strong>{change !== undefined && change !== null && <span className="dashboard-summary-change"><span className={change >= 0 ? 'dashboard-change-up' : 'dashboard-change-down'} aria-hidden="true">{change >= 0 ? <TrendingUp className="size-3.5" /> : <TrendingDown className="size-3.5" />}</span>{Math.abs(change) > 999 ? '>999' : Math.abs(change).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%<span className="sr-only">{change >= 0 ? ' naik' : ' turun'} dibanding periode sebelumnya</span></span>}</>}</div>
+    <div className="dashboard-summary-count">{loading ? <Skeleton className="h-8 w-14 rounded-md" /> : <><strong className="stock-summary-value"><NumberTicker value={value} key={value} /></strong>{change !== undefined && change !== null && <span className={change >= 0 ? 'dashboard-summary-change dashboard-change-up' : 'dashboard-summary-change dashboard-change-down'}><span aria-hidden="true">{change >= 0 ? <TrendingUp className="size-3.5" /> : <TrendingDown className="size-3.5" />}</span>{Math.abs(change) > 999 ? '>999' : Math.abs(change).toLocaleString('id-ID', { maximumFractionDigits: 1 })}%<span className="sr-only">{change >= 0 ? ' naik' : ' turun'} dibanding periode sebelumnya</span></span>}</>}</div>
     <div className="stock-summary-label"><h2><span aria-hidden="true" />{label}</h2>{hint && <p>{hint}</p>}</div>
     <span className="stock-summary-icon" aria-hidden="true">{icon}</span>
   </article>;
