@@ -75,7 +75,12 @@ def wib_bounds(date_from: str, date_to: str):
     return (datetime.combine(start, time.min, WIB), datetime.combine(end + timedelta(days=1), time.min, WIB))
 
 
-def _filters(include_inactive: bool):
+def _filters(include_inactive: bool, stock_status: str | None = None):
+    if stock_status is not None:
+        selected = {item.strip() for item in stock_status.split(',') if item.strip()}
+        if not selected or selected - {'ready', 'on_hold', 'sold'}:
+            raise HTTPException(400, 'Status match tidak valid.')
+        return [item for item in ('ready', 'on_hold', 'sold') if item in selected]
     allowed = ['ready', 'on_hold', 'sold'] if include_inactive else ['ready']
     return allowed
 
@@ -83,13 +88,14 @@ def _filters(include_inactive: bool):
 @router.get('')
 def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from: str = '', date_to: str = '',
                    temps: str = 'hot,warm', include_inactive: bool = False, limit: int = 30, offset: int = 0,
-                   per_source: int = 20, source_entity: UUID | None = None, match_offset: int = 0):
+                   per_source: int = 20, source_entity: UUID | None = None, match_offset: int = 0,
+                   stock_status: str | None = None):
     """New matches grouped by the buyer (``buyer``) or the listing (``property``) they belong to."""
     today = datetime.now(WIB).date().isoformat()
     start, end = wib_bounds(date_from or today, date_to or date_from or today)
     wanted = {item for item in temps.split(',') if item in {'hot', 'warm'}}
     source_col, target_col = ('buyer_entity', 'listing_entity') if direction == 'buyer' else ('listing_entity', 'buyer_entity')
-    allowed = _filters(include_inactive)
+    allowed = _filters(include_inactive, stock_status)
     limit = min(max(limit, 1), 100)
     per_source = min(max(per_source, 0), 50)
     base = f'''FROM xm.match_events me
@@ -169,10 +175,10 @@ def recent_matches(direction: Literal['buyer', 'property'] = 'buyer', date_from:
 
 @router.get('/days')
 def recent_days(date_from: str, date_to: str, include_inactive: bool = False,
-                direction: Literal['buyer', 'property'] | None = None):
+                direction: Literal['buyer', 'property'] | None = None, stock_status: str | None = None):
     """Per-day counts for the calendar: how many new matches were found on each Jakarta day."""
     start, end = wib_bounds(date_from, date_to)
-    allowed = _filters(include_inactive)
+    allowed = _filters(include_inactive, stock_status)
     # Only the Match Terbaru page asks for its calendar.
     activity.record_view('page.open', 'membuka Match Terbaru')
     with connect() as conn:

@@ -1,21 +1,20 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Avatar, Button, Label, ListBox, Select, toast, useOverlayState } from '@heroui/react';
-import { Boxes, ClipboardList, Download, Eye, History, Pencil, PhoneCall, Plus, Tag, UploadCloud } from 'lucide-react';
+import { useMemo, useState, type CSSProperties } from 'react';
+import { Avatar, Button, Dropdown, Label, Tabs, toast, useOverlayState } from '@heroui/react';
+import { ArrowDownUp, BadgeCheck, Boxes, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, Eye, History, Pencil, PhoneCall, Plus, Search, Tag, UploadCloud, X } from 'lucide-react';
 import { BarsChart, Sparkline } from '@/components/charts/charts';
 import { colors } from '@/components/charts/chart-setup';
-import { EmptyState, ErrorNotice, IconBadge, LoadingIndicator, LoadingRows, PageHeader, Panel, StatTile } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, LoadingIndicator, LoadingRows } from '@/components/app/primitives';
 import { SalesListingsModal } from '@/components/app/sales-listings-modal';
 import { TrackedEditor } from '@/components/app/tracked-editor';
-import { PeriodPicker, type Period } from '@/components/app/period-picker';
-import { BlurFade } from '@/components/magicui/blur-fade';
-import { ShimmerButton } from '@/components/magicui/shimmer-button';
+import { RangeButton, type Period } from '@/components/app/period-picker';
 import { errorMessage, query } from '@/lib/api';
 import { cleanName, dateTime, formatPhone, initials, number, relativeDate, shiftDay, todayWib } from '@/lib/format';
-import type { Navigate } from '@/lib/router';
+import { useRoute, type Navigate } from '@/lib/router';
+import { SettingsPagination, useTableViewport } from '@/components/settings/settings-pagination';
 import { useCompany } from '@/lib/session';
-import { useData } from '@/lib/use-data';
+import { useData, useDebounced } from '@/lib/use-data';
 import type { StockLogRow, StockOverview, StockTracked } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/lib/workspace-context';
@@ -29,8 +28,13 @@ const EVENT = {
 
 const salesName = (item: { label: string | null; contact_name: string | null; phone: string }) => item.label || cleanName(item.contact_name) || 'Sales';
 
-export default function StockPage(_props: { navigate?: Navigate }) {
+export default function StockPage({ navigate }: { navigate?: Navigate }) {
   const api = useApi();
+  const { params, navigate: go } = useRoute();
+  const open = navigate ?? go;
+  const tab = params.get('tab') === 'analytic' ? 'analytic' : 'list';
+  const viewport = useTableViewport();
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const { company, refresh } = useCompany();
   const canEdit = !!company?.permissions.manage_settings;
   const [tick, setTick] = useState(0);
@@ -39,16 +43,44 @@ export default function StockPage(_props: { navigate?: Navigate }) {
   const [viewing, setViewing] = useState<StockTracked | null>(null);
   const [phone, setPhone] = useState('');
   const [period, setPeriod] = useState<Period>({ preset: 'all', from: '', to: '' });
-  const [limit, setLimit] = useState(30);
+  const [logPage, setLogPage] = useState(1);
+  const [logPageSize, setLogPageSize] = useState(20);
+  const [search, setSearch] = useState('');
+  const searchTerm = useDebounced(search.trim().toLocaleLowerCase('id-ID'), 250);
+  const [sort, setSort] = useState('newest');
   const [snapshotBusy, setSnapshotBusy] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
 
   const overview = useData((signal) => api.get<StockOverview>('/stock/overview', signal), [tick]);
-  const log = useData((signal) => api.get<{ rows: StockLogRow[]; has_more: boolean }>(`/stock/log?${query({ phone, date_from: period.from, date_to: period.to, limit })}`, signal), [phone, period.from, period.to, limit, tick]);
+  const log = useData(async (signal) => {
+    const rows: StockLogRow[] = [];
+    let hasMore = true;
+    while (hasMore) {
+      const page = await api.get<{ rows: StockLogRow[]; has_more: boolean }>(`/stock/log?${query({ phone, date_from: period.from, date_to: period.to, limit: 200, offset: rows.length })}`, signal);
+      rows.push(...page.rows);
+      hasMore = page.has_more && page.rows.length > 0;
+    }
+    return { rows };
+  }, [phone, period.from, period.to, tick], tab === 'analytic');
 
   const tracked = useMemo(() => overview.data?.tracked ?? [], [overview.data]);
   const totals = overview.data?.totals;
-  const chartRows = useMemo(() => tracked.map((item) => ({ name: salesName(item).slice(0, 18), tail: item.phone.slice(-4), ...item.counts })), [tracked]);
+  const chartRows = useMemo(() => tracked.map((item) => ({ name: salesName(item), ...item.counts })), [tracked]);
+
+  const nameOf = (row: StockLogRow) => salesName({ label: row.label, contact_name: tracked.find((item) => item.phone === row.phone)?.contact_name ?? null, phone: row.phone });
+  const filteredLog = (log.data?.rows ?? []).filter((row) => `${nameOf(row)} ${row.phone} ${formatPhone(row.phone)} ${row.agent_name ?? ''} ${EVENT[row.event_type].label}`.toLocaleLowerCase('id-ID').includes(searchTerm)).sort((a, b) => {
+    if (sort === 'oldest') return Date.parse(a.logged_at) - Date.parse(b.logged_at);
+    if (sort === 'sales-asc') return nameOf(a).localeCompare(nameOf(b), 'id');
+    if (sort === 'sales-desc') return nameOf(b).localeCompare(nameOf(a), 'id');
+    if (sort === 'ready') return b.ready - a.ready;
+    if (sort === 'on-hold') return b.on_hold - a.on_hold;
+    if (sort === 'sold') return b.sold - a.sold;
+    if (sort === 'total') return b.total - a.total;
+    return Date.parse(b.logged_at) - Date.parse(a.logged_at);
+  });
+  const currentLogPage = Math.min(logPage, Math.max(1, Math.ceil(filteredLog.length / logPageSize)));
+  const logRows = filteredLog.slice((currentLogPage - 1) * logPageSize, currentLogPage * logPageSize);
+  const sortOptions = [{ id: 'newest', label: 'Terbaru' }, { id: 'oldest', label: 'Terlama' }, { id: 'sales-asc', label: 'Sales: A-Z' }, { id: 'sales-desc', label: 'Sales: Z-A' }, { id: 'ready', label: 'Ready terbanyak' }, { id: 'on-hold', label: 'On-hold terbanyak' }, { id: 'sold', label: 'Sold terbanyak' }, { id: 'total', label: 'Total terbanyak' }];
 
   async function snapshot() {
     setSnapshotBusy(true);
@@ -82,82 +114,79 @@ export default function StockPage(_props: { navigate?: Navigate }) {
     { id: '30', label: '30 hari terakhir', range: () => ({ from: shiftDay(today, -29), to: today }) },
   ];
 
-  return (
-    <div className="space-y-6">
-      <PageHeader title="Stok Sales" description="Pantau berapa listing milik setiap sales, berdasarkan nomor telepon yang tertulis di pesan. Dicatat otomatis setiap kali data diunggah atau status listing diubah."
-        actions={<>
-          {tracked.length > 0 && <Button variant="secondary" isPending={downloading === 'all'} isDisabled={!!downloading} onPress={() => download()}><Download className="size-4" aria-hidden="true" />Download semua listing sales</Button>}
-          {canEdit && <><Button variant="secondary" isPending={snapshotBusy} isDisabled={!tracked.length} onPress={snapshot}><ClipboardList className="size-4" aria-hidden="true" />Catat sekarang</Button>
-          <ShimmerButton onClick={() => editor.open()} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-11 px-5 font-semibold"><PhoneCall className="mr-2 size-4" aria-hidden="true" />Atur nomor sales</ShimmerButton></>}
-        </>} />
-
+  return <div className="general-settings stock-page">
+    <Tabs className="settings-tabs stock-tabs" selectedKey={tab} onSelectionChange={(key) => open('stok', { tab: String(key) })} variant="secondary">
+      <div className="stock-tab-bar">
+        <div className="xm-scroll-x min-w-0"><Tabs.List aria-label="Bagian stok sales">
+          <Tabs.Tab id="list">List Stok<Tabs.Indicator /></Tabs.Tab>
+          <Tabs.Tab id="analytic">Analytic Stok<Tabs.Indicator /></Tabs.Tab>
+        </Tabs.List></div>
+        <div className="stock-header-actions">
+          {tab === 'list' ? <>
+            {tracked.length > 0 && <Button variant="secondary" isPending={downloading === 'all'} isDisabled={!!downloading} onPress={() => download()}><Download className="size-4" aria-hidden="true" />Download semua</Button>}
+            {canEdit && <Button onPress={() => editor.open()}><PhoneCall className="size-4" aria-hidden="true" />Atur nomor sales</Button>}
+          </> : canEdit && <Button variant="secondary" isPending={snapshotBusy} isDisabled={!tracked.length} onPress={snapshot}><ClipboardList className="size-4" aria-hidden="true" />Catat sekarang</Button>}
+        </div>
+      </div>
       <ErrorNotice message={overview.error} onRetry={overview.reload} />
       {overview.loading && !overview.data && <LoadingRows rows={3} />}
-
-      {overview.data && tracked.length === 0 && (
-        <div className="xm-card">
-          <EmptyState animation="searching" title="Belum ada nomor sales yang dipantau"
-            description={canEdit ? 'Masukkan nomor telepon sales, pisahkan dengan koma. Contoh: 6282233744657, 6281202310022. Pengaturan ini berlaku untuk seluruh company.' : 'Super admin company dapat menambahkan nomor sales yang ingin dipantau.'}
-            action={canEdit ? <ShimmerButton onClick={() => editor.open()} background="oklch(0.48 0.235 265)" borderRadius="14px" className="h-12 px-6 font-semibold"><Plus className="mr-2 size-5" aria-hidden="true" />Tambah nomor sales</ShimmerButton> : undefined} />
-        </div>
-      )}
-
-      {totals && tracked.length > 0 && (
-        <>
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-            <BlurFade><StatTile label="Total listing dipantau" value={totals.total} icon={<Boxes />} tone="indigo" hint={`${tracked.length} nomor sales`} /></BlurFade>
-            <BlurFade delay={0.05}><StatTile label="Ready" value={totals.ready} icon={<Boxes />} tone="green" /></BlurFade>
-            <BlurFade delay={0.1}><StatTile label="On-hold" value={totals.on_hold} icon={<Boxes />} tone="amber" /></BlurFade>
-            <BlurFade delay={0.15}><StatTile label="Sold" value={totals.sold} icon={<Boxes />} tone="blue" /></BlurFade>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-            {tracked.map((item, index) => (
-              <BlurFade key={item.phone} delay={0.05 * index}><SalesCard item={item} onOpen={() => { setViewing(item); listings.open(); }} onDownload={() => download(item)} downloading={downloading === item.phone} busy={!!downloading} /></BlurFade>
-            ))}
-          </div>
-
-          {tracked.length > 1 && (
-            <Panel title="Perbandingan stok antar sales" description="Jumlah listing Ready, On-hold, dan Sold per nomor.">
-              <BarsChart horizontal stacked height={Math.max(220, tracked.length * 58)} ariaLabel="Diagram batang bertumpuk stok per sales"
-                labels={chartRows.map((row) => `${row.name} ···${row.tail}`)}
-                series={[{ label: 'Ready', data: chartRows.map((row) => row.ready), color: colors.green }, { label: 'On-hold', data: chartRows.map((row) => row.on_hold), color: colors.amber }, { label: 'Sold', data: chartRows.map((row) => row.sold), color: colors.blue }]} />
-            </Panel>
-          )}
-        </>
-      )}
-
-      {tracked.length > 0 && (
-        <Panel title={<span className="flex items-center gap-2"><History className="size-5 text-accent" aria-hidden="true" />Riwayat pencatatan otomatis</span>} description="Setiap baris adalah satu catatan: berapa listing milik sales itu pada saat kejadian."
-          bodyClassName="space-y-4">
-          <div className="grid gap-4 md:grid-cols-[minmax(220px,300px)_1fr]">
-            <Select value={phone || 'all'} onChange={(value) => { setPhone(value === 'all' ? '' : String(value)); setLimit(30); }} aria-label="Filter sales" fullWidth>
-              <Label className="text-base font-bold">Sales</Label>
-              <Select.Trigger className="h-12 text-base"><Select.Value /><Select.Indicator /></Select.Trigger>
-              <Select.Popover>
-                <ListBox>
-                  <ListBox.Item id="all" textValue="Semua sales">Semua sales<ListBox.ItemIndicator /></ListBox.Item>
-                  {tracked.map((item) => <ListBox.Item key={item.phone} id={item.phone} textValue={`${salesName(item)} ${item.phone}`}>{salesName(item)} · {formatPhone(item.phone)}<ListBox.ItemIndicator /></ListBox.Item>)}
-                </ListBox>
-              </Select.Popover>
-            </Select>
-            <div><p className="mb-2 text-base font-bold">Periode</p><PeriodPicker value={period} onChange={(next) => { setPeriod(next); setLimit(30); }} presets={presets} max={today} /></div>
+      <Tabs.Panel id="list">
+        {overview.data && <div className="stock-summary-grid">
+          {([
+            { label: 'Total listing', value: totals?.total ?? 0, hint: `${tracked.length} nomor sales dipantau`, icon: Boxes, color: '#3a7bf0' },
+            { label: 'Ready', value: totals?.ready ?? 0, hint: 'Listing tersedia', icon: CheckCircle2, color: '#059669' },
+            { label: 'On-hold', value: totals?.on_hold ?? 0, hint: 'Listing sedang ditahan', icon: Clock3, color: '#f59e0b' },
+            { label: 'Sold', value: totals?.sold ?? 0, hint: 'Listing terjual', icon: BadgeCheck, color: '#3a7bf0' },
+          ]).map((summary) => <article key={summary.label} className="stock-summary" style={{ '--stock-summary-color': summary.color } as CSSProperties}>
+            <strong className="stock-summary-value">{number(summary.value)}</strong>
+            <div className="stock-summary-label"><h2><span aria-hidden="true" />{summary.label}</h2><p>{summary.hint}</p></div>
+            <summary.icon className="stock-summary-icon" aria-hidden="true" />
+          </article>)}
+        </div>}
+        {overview.data && tracked.length === 0 && <EmptyState compact animation="searching" title="Belum ada nomor sales yang dipantau" description={canEdit ? 'Tambahkan nomor sales untuk mulai memantau stok listing perusahaan.' : 'Super admin company dapat menambahkan nomor sales yang ingin dipantau.'} action={canEdit ? <Button onPress={() => editor.open()}><Plus className="size-4" />Tambah nomor sales</Button> : undefined} />}
+        {tracked.length > 0 && <ul className="team-member-grid">{tracked.map((item) => <SalesCard key={item.phone} item={item} onOpen={() => { setViewing(item); listings.open(); }} onDownload={() => download(item)} downloading={downloading === item.phone} busy={!!downloading} />)}</ul>}
+      </Tabs.Panel>
+      <Tabs.Panel id="analytic">
+        {overview.data && <section className="stock-comparison" aria-label="Perbandingan stok antar sales">
+          <h2 className="text-base font-semibold">Perbandingan stok antar sales</h2>
+          <p className="mt-1 mb-4 text-sm text-muted">Jumlah listing Ready, On-hold, dan Sold per nomor sales.</p>
+          {tracked.length > 1 ? <BarsChart horizontal stacked height={Math.max(220, tracked.length * 58)} ariaLabel="Diagram batang bertumpuk stok per sales" labels={chartRows.map((row) => row.name)} series={[{ label: 'Ready', data: chartRows.map((row) => row.ready), color: colors.green }, { label: 'On-hold', data: chartRows.map((row) => row.on_hold), color: colors.amber }, { label: 'Sold', data: chartRows.map((row) => row.sold), color: colors.blue }]} /> : <EmptyState compact title="Belum cukup sales untuk dibandingkan" description="Pantau minimal dua nomor sales untuk melihat perbandingan stok." />}
+        </section>}
+        <section className="stock-log-section" aria-label="Riwayat pencatatan stok">
+          <h2 className="flex items-center gap-2 text-base font-semibold"><History className="size-4" aria-hidden="true" />Riwayat pencatatan stok</h2>
+          <div className="stock-log-filters">
+            <div className="team-search"><Search className="size-4 shrink-0" aria-hidden="true" /><input type="search" aria-label="Cari sales, nomor, atau kejadian" placeholder="Cari sales, nomor, atau kejadian..." value={search} onChange={(event) => { setSearch(event.target.value); setLogPage(1); }} />{search && <button type="button" aria-label="Hapus pencarian" onClick={() => { setSearch(''); setLogPage(1); }}><X className="size-4" /></button>}</div>
+            <div className="stock-log-select"><select aria-label="Filter sales" value={phone} onChange={(event) => { setPhone(event.target.value); setLogPage(1); }}><option value="">Semua sales</option>{tracked.map((item) => <option key={item.phone} value={item.phone}>{salesName(item)} - {formatPhone(item.phone)}</option>)}</select></div>
+            <div className="stock-log-select"><select aria-label="Filter periode riwayat stok" value={period.preset} onChange={(event) => {
+              const value = event.target.value;
+              if (value === 'custom') { setPeriod((current) => ({ ...current, preset: 'custom' })); setCalendarOpen(true); return; }
+              const preset = presets.find((item) => item.id === value);
+              if (preset) { setPeriod({ preset: value, ...preset.range() }); setLogPage(1); setCalendarOpen(false); }
+            }}>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}<option value="custom">Pilih tanggal</option></select></div>
+            <Dropdown><Dropdown.Trigger className="upload-history-sort" aria-label="Urutkan riwayat stok"><ArrowDownUp className="size-4" aria-hidden="true" /><span>{sortOptions.find((item) => item.id === sort)?.label}</span><ChevronDown className="size-4" aria-hidden="true" /></Dropdown.Trigger><Dropdown.Popover placement="bottom end" className="upload-history-sort-menu"><Dropdown.Menu aria-label="Urutan riwayat stok" selectionMode="single" selectedKeys={new Set([sort])} onAction={(key) => { setSort(String(key)); setLogPage(1); }}>{sortOptions.map((item) => <Dropdown.Item key={item.id} id={item.id} textValue={item.label} className={sort === item.id ? 'is-current' : ''}><Label>{item.label}</Label></Dropdown.Item>)}</Dropdown.Menu></Dropdown.Popover></Dropdown>
+            {period.preset === 'custom' && <RangeButton value={period} active={!!period.from} max={today} isOpen={calendarOpen} onOpenChange={setCalendarOpen} onChange={(range) => { setPeriod({ preset: 'custom', ...range }); setLogPage(1); }} />}
           </div>
           <ErrorNotice message={log.error} onRetry={log.reload} />
           {log.loading && !log.data && <LoadingRows rows={3} />}
           {log.loading && log.data && <LoadingIndicator />}
-          {!log.loading && log.data && log.data.rows.length === 0 && <EmptyState compact title="Belum ada catatan pada filter ini" />}
-          <ul className={cn('divide-y divide-separator rounded-2xl border border-border bg-surface transition-opacity', log.loading && log.data && 'opacity-60')}>
-            {log.data?.rows.map((row) => <LogRow key={row.id} row={row} name={salesName({ label: row.label, contact_name: tracked.find((item) => item.phone === row.phone)?.contact_name ?? null, phone: row.phone })} />)}
-          </ul>
-          {log.data?.has_more && <Button variant="secondary" size="lg" fullWidth onPress={() => setLimit((value) => value + 30)}>Tampilkan lebih banyak</Button>}
-        </Panel>
-      )}
-
-      <SalesListingsModal state={listings} phone={viewing?.phone ?? ''} name={viewing ? salesName(viewing) : ''} />
-      <TrackedEditor state={editor} current={tracked} onSaved={() => { setTick((value) => value + 1); refresh(); }} />
-    </div>
-  );
+          {!log.loading && !log.error && filteredLog.length === 0 && <EmptyState compact title="Belum ada catatan pada filter ini" />}
+          {filteredLog.length > 0 && <div className={cn('activity-data', log.loading && 'opacity-60')} aria-busy={log.loading}>
+            {viewport === 'mobile' ? <ul className="activity-mobile-cards">{logRows.map((row) => <LogCard key={row.id} row={row} name={salesName({ label: row.label, contact_name: tracked.find((item) => item.phone === row.phone)?.contact_name ?? null, phone: row.phone })} />)}</ul> : <div className="sales-table-wrap"><table className="sales-table activity-table stock-log-table" aria-label="Riwayat pencatatan stok">
+              <thead><tr>{['Waktu', 'Sales', 'Kejadian', 'Ready', 'On-hold', 'Sold', 'Total'].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
+              <tbody>{logRows.map((row) => <tr key={row.id}>
+                <td className="activity-time">{dateTime(row.logged_at)}</td><td><strong className="activity-actor">{salesName({ label: row.label, contact_name: tracked.find((item) => item.phone === row.phone)?.contact_name ?? null, phone: row.phone })}</strong><span className="activity-secondary">{formatPhone(row.phone)}</span></td>
+                <td>{EVENT[row.event_type].label}{row.event_type === 'import' && row.agent_name && <span className="activity-secondary">{row.agent_name}</span>}</td>
+                <td style={{ color: colors.green }}>{number(row.ready)} <Delta value={row.delta_ready} /></td><td style={{ color: colors.amber }}>{number(row.on_hold)}</td><td style={{ color: colors.blue }}>{number(row.sold)}</td><td>{number(row.total)} <Delta value={row.delta_total} /></td>
+              </tr>)}</tbody>
+            </table></div>}
+            <SettingsPagination total={filteredLog.length} label="catatan stok" page={currentLogPage} pageSize={logPageSize} onPage={setLogPage} onPageSize={(size) => { setLogPageSize(size); setLogPage(1); }} />
+          </div>}
+        </section>
+      </Tabs.Panel>
+    </Tabs>
+    <SalesListingsModal state={listings} phone={viewing?.phone ?? ''} name={viewing ? salesName(viewing) : ''} />
+    <TrackedEditor state={editor} current={tracked} onSaved={() => { setTick((value) => value + 1); refresh(); }} />
+  </div>;
 }
 
 function Delta({ value }: { value: number }) {
@@ -168,45 +197,29 @@ function Delta({ value }: { value: number }) {
 function SalesCard({ item, onOpen, onDownload, downloading, busy }: { item: StockTracked; onOpen: () => void; onDownload: () => void; downloading: boolean; busy: boolean }) {
   const name = salesName(item);
   const history = item.history.map((point) => point.ready);
-  return (
-    <article className="xm-card flex h-full flex-col p-4 sm:p-5">
-      <div className="flex items-center gap-3">
-        <Avatar color="accent" size="lg"><Avatar.Fallback>{initials(name)}</Avatar.Fallback></Avatar>
-        <div className="min-w-0 flex-1"><p className="truncate text-lg font-bold">{name}</p><p className="text-base text-muted">{formatPhone(item.phone)}</p></div>
-      </div>
-      <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
-        {([['Ready', item.counts.ready, 'bg-success-soft text-success-soft-foreground'], ['On-hold', item.counts.on_hold, 'bg-warning-soft text-warning-soft-foreground'], ['Sold', item.counts.sold, 'bg-accent-soft text-accent-soft-foreground']] as const).map(([label, value, tone]) => (
-          <div key={label} className={cn('rounded-2xl px-2 py-3', tone)}><dd className="text-3xl font-bold leading-none tracking-tight">{number(value)}</dd><dt className="mt-1.5 text-sm font-semibold">{label}</dt></div>
-        ))}
-      </dl>
-      <p className="mt-3 text-base text-muted">{item.new_7d > 0 ? <><strong className="text-foreground">+{item.new_7d}</strong> listing baru dalam 7 hari</> : 'Tidak ada listing baru dalam 7 hari'}{item.last_posted_at ? ` · posting terakhir ${relativeDate(item.last_posted_at)}` : ''}</p>
-      <div className="mt-3 flex-1"><p className="mb-1 text-sm font-semibold text-muted">Perkembangan stok ready</p><Sparkline values={history} className="h-16" color={colors.green} /></div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <Button variant="secondary" fullWidth onPress={onOpen}>Lihat listing sales ini</Button>
-        <Button variant="secondary" fullWidth isPending={downloading} isDisabled={busy} onPress={onDownload}><Download className="size-4" aria-hidden="true" />Download Excel</Button>
-      </div>
-    </article>
-  );
+  return <li className="team-member-card stock-sales-card">
+    <div className="team-card-heading">
+      <Avatar color="accent" size="sm" className="team-member-avatar"><Avatar.Fallback>{initials(name)}</Avatar.Fallback></Avatar>
+      <div className="min-w-0 flex-1"><div className="team-member-name"><h2 className="text-base font-semibold" title={name}>{name}</h2></div><p className="team-member-email">{formatPhone(item.phone)}</p></div>
+      <Dropdown><Dropdown.Trigger className="team-card-action" aria-label={`Aksi ${name}`}><ChevronDown className="size-4" aria-hidden="true" /></Dropdown.Trigger><Dropdown.Popover placement="bottom end" className="sales-action-menu"><Dropdown.Menu aria-label={`Aksi stok ${name}`} onAction={(key) => { if (key === 'listings') onOpen(); else if (key === 'download' && !busy) onDownload(); }}>
+        <Dropdown.Item id="listings" textValue="Lihat listing"><Eye className="size-4" /><Label>Lihat listing</Label></Dropdown.Item><Dropdown.Item id="download" textValue="Download Excel" isDisabled={busy}><Download className="size-4" /><Label>{downloading ? 'Menyiapkan Excel...' : 'Download Excel'}</Label></Dropdown.Item>
+      </Dropdown.Menu></Dropdown.Popover></Dropdown>
+    </div>
+    <dl className="stock-sales-counts">{([{ label: 'Ready', value: item.counts.ready, color: colors.green }, { label: 'On-hold', value: item.counts.on_hold, color: colors.amber }, { label: 'Sold', value: item.counts.sold, color: colors.blue }]).map((status) => <div key={status.label}><dt>{status.label}</dt><dd style={{ color: status.color }}>{number(status.value)}</dd></div>)}</dl>
+    <div className="stock-sales-body">
+      {item.counts.total > 0 || item.last_posted_at ? <dl className="stock-sales-activity">
+        <div><dt>Listing baru (7 hari)</dt><dd>{number(item.new_7d)}</dd></div>
+        {item.last_posted_at && <div><dt>Posting terakhir</dt><dd>{relativeDate(item.last_posted_at)}</dd></div>}
+      </dl> : <p className="text-xs text-muted">Belum ada listing untuk nomor ini.</p>}
+      {history.length >= 2 && <div className="stock-sales-chart"><p className="mb-1 text-xs text-muted">Tren jumlah listing Ready</p><Sparkline values={history} className="h-12" color={colors.green} /></div>}
+    </div>
+  </li>;
 }
 
-function LogRow({ row, name }: { row: StockLogRow; name: string }) {
-  const meta = EVENT[row.event_type];
-  return (
-    <li className="flex gap-3 p-3.5 sm:p-4">
-      <IconBadge icon={<meta.icon />} tone={meta.tone} className="size-10 rounded-xl" />
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-          <p className="text-base font-bold">{meta.label}{row.event_type === 'import' && row.agent_name ? <span className="font-medium text-muted"> · {row.agent_name}</span> : null}</p>
-          <time className="text-sm text-muted" title={dateTime(row.logged_at)}>{dateTime(row.logged_at, false)}</time>
-        </div>
-        <p className="text-base text-muted">{name} · {formatPhone(row.phone)}</p>
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-base">
-          <span>Ready <strong>{row.ready}</strong> <Delta value={row.delta_ready} /></span>
-          <span>On-hold <strong>{row.on_hold}</strong></span>
-          <span>Sold <strong>{row.sold}</strong></span>
-          <span className="text-muted">Total {row.total} <Delta value={row.delta_total} /></span>
-        </p>
-      </div>
-    </li>
-  );
+function LogCard({ row, name }: { row: StockLogRow; name: string }) {
+  return <li className="activity-mobile-card stock-log-card"><header><div><h2>{name}</h2><p className="activity-secondary">{formatPhone(row.phone)}</p></div></header>
+    <p className="activity-card-summary">{EVENT[row.event_type].label}{row.event_type === 'import' && row.agent_name ? ` - ${row.agent_name}` : ''}</p>
+    <p className="stock-log-time"><span>Waktu</span><time>{dateTime(row.logged_at)}</time></p>
+    <dl className="stock-log-card-counts"><div><dt>Ready</dt><dd style={{ color: colors.green }}>{number(row.ready)} <Delta value={row.delta_ready} /></dd></div><div><dt>On-hold</dt><dd style={{ color: colors.amber }}>{number(row.on_hold)}</dd></div><div><dt>Sold</dt><dd style={{ color: colors.blue }}>{number(row.sold)}</dd></div><div><dt>Total</dt><dd>{number(row.total)} <Delta value={row.delta_total} /></dd></div></dl>
+  </li>;
 }

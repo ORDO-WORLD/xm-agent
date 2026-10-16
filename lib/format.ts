@@ -62,10 +62,10 @@ export function asWib(value?: string | null) {
 
 const wibDay = (time: number) => Math.floor((time + 7 * 3_600_000) / 86_400_000);
 
-export function relativeDate(value?: string | null) {
+export function relativeDate(value?: string | null, now = Date.now()) {
   const date = asWib(value);
   if (!date) return 'tanggal tidak tersedia';
-  const days = wibDay(Date.now()) - wibDay(date.getTime());
+  const days = wibDay(now) - wibDay(date.getTime());
   if (days < 0) return 'tanggal mendatang';
   if (days === 0) return 'hari ini';
   if (days === 1) return 'kemarin';

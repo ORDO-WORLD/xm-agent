@@ -19,7 +19,7 @@ const fromIso = (iso: string) => { const [y, m, d] = iso.split('-').map(Number);
  * Pick a day or a range. Days that carry something (new matches, posts) can show a count,
  * which makes it obvious where to look.
  */
-export function RangeButton({ value, onChange, max, markers, onMonthChange, active, label = 'Pilih tanggal' }: {
+export function RangeButton({ value, onChange, max, markers, onMonthChange, active, label = 'Pilih tanggal', isOpen, onOpenChange, helpText, highlightToday = true, iconOnly = false }: {
   value: { from: string; to: string };
   onChange: (range: { from: string; to: string }) => void;
   max?: string;
@@ -27,8 +27,15 @@ export function RangeButton({ value, onChange, max, markers, onMonthChange, acti
   onMonthChange?: (monthStartIso: string) => void;
   active?: boolean;
   label?: string;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  helpText?: string;
+  highlightToday?: boolean;
+  iconOnly?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = isOpen ?? localOpen;
+  const setOpen = (next: boolean) => { setLocalOpen(next); onOpenChange?.(next); };
   const [months, setMonths] = useState(2);
   useEffect(() => {
     const update = () => setMonths(window.innerWidth >= 900 ? 2 : 1);
@@ -57,9 +64,9 @@ export function RangeButton({ value, onChange, max, markers, onMonthChange, acti
   return (
     <Popover isOpen={open} onOpenChange={(next) => { setOpen(next); if (next) setDraft(undefined); }}>
       <Popover.Trigger>
-        <Button variant={active ? 'primary' : 'secondary'} className="shrink-0" aria-label={`Pilih tanggal. Saat ini: ${active ? prettyRange(value.from, value.to) : 'belum dipilih'}`}>
+        <Button variant={active ? 'primary' : 'secondary'} isIconOnly={iconOnly} className="shrink-0" aria-label={`Pilih tanggal. Saat ini: ${active ? prettyRange(value.from, value.to) : 'belum dipilih'}`}>
           <CalendarDays className="size-4" aria-hidden="true" />
-          {active && value.from ? prettyRange(value.from, value.to) : label}
+          {!iconOnly && (active && value.from ? prettyRange(value.from, value.to) : label)}
         </Button>
       </Popover.Trigger>
       <Popover.Content placement="bottom start" className="max-w-[calc(100vw-1rem)]">
@@ -89,7 +96,7 @@ export function RangeButton({ value, onChange, max, markers, onMonthChange, acti
               weekday: 'h-9 w-10 text-center text-sm font-semibold text-muted',
               day: 'relative size-10 p-0 text-center',
               day_button: 'relative flex size-10 w-full items-center justify-center rounded-full text-base font-medium hover:bg-default',
-              today: 'font-extrabold text-accent',
+              today: highlightToday ? 'font-extrabold text-accent' : '',
               outside: 'text-muted/50',
               disabled: 'text-muted/40 line-through',
               selected: 'bg-accent-soft',
@@ -105,13 +112,13 @@ export function RangeButton({ value, onChange, max, markers, onMonthChange, acti
                 return (
                   <button type="button" {...rest}>
                     {children}
-                    {!!count && <span aria-label={`${count} data`} className="absolute -top-1 -right-1 min-w-4 rounded-full bg-success px-1 text-center text-[0.65rem] leading-4 font-bold text-success-foreground">{count > 99 ? '99+' : count}</span>}
+                    {!!count && <span aria-label={`${count} data`} className="absolute -top-1 -right-1 min-w-4 rounded-full bg-success px-1 text-center text-[0.65rem] leading-4 font-bold text-white">{count > 99 ? '99+' : count}</span>}
                   </button>
                 );
               },
             }}
           />
-          <p className="mt-3 max-w-[36rem] text-sm text-muted">Ketuk tanggal awal, lalu tanggal akhir. Untuk satu hari saja, ketuk tanggal yang sama dua kali.</p>
+          <p className="mt-3 max-w-[36rem] text-sm text-muted">{helpText ?? 'Ketuk tanggal awal, lalu tanggal akhir. Untuk satu hari saja, ketuk tanggal yang sama dua kali.'}</p>
         </Popover.Dialog>
       </Popover.Content>
     </Popover>

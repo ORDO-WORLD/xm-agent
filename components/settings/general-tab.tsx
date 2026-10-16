@@ -1,19 +1,40 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Button, Chip, Input, Label, Switch, TextArea, TextField, toast } from '@heroui/react';
-import { Building2, LockKeyhole, RotateCcw, Save, Search, Users } from 'lucide-react';
-import { LottiePlayer } from '@/components/lottie/lottie-player';
-import { LoadingIndicator, Notice, Panel, Segmented } from '@/components/app/primitives';
+import { useEffect, useState, type ReactNode } from 'react';
+import { Button, Input, Label, Switch, TextArea, TextField, toast } from '@heroui/react';
+import { Building2, ChevronDown, Info, LoaderCircle, LockKeyhole, RotateCcw, Save, Search, UsersRound, Workflow, type LucideIcon } from 'lucide-react';
 import { errorMessage } from '@/lib/api';
+import { useSectionSearchLabel } from '@/lib/section-search';
 import { useCompany } from '@/lib/session';
 import type { GroupBy, MatchingMode } from '@/lib/types';
 import { useApi } from '@/lib/workspace-context';
 
 type SearchState = { terms: string[]; company_terms: string[]; personal_terms: string[] | null; locked: boolean; can_edit_company: boolean; can_edit_personal: boolean };
-
+type Job = { status: string; error?: string };
 const toLines = (terms: string[]) => terms.join('\n');
 const fromText = (text: string) => [...new Set(text.split(/[,;\n]+/).map((term) => term.trim()).filter(Boolean))];
+
+function SearchLabel({ children }: { children: string }) {
+  const label = useSectionSearchLabel(children, 'umum');
+  return <span id={label.id}>{label.content}</span>;
+}
+
+function GeneralNote({ children }: { children: ReactNode }) {
+  return <p className="general-note"><Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><span>{children}</span></p>;
+}
+
+function GeneralSection({ title, description, icon: Icon, children }: { title: string; description: string; icon: LucideIcon; children: ReactNode }) {
+  const label = useSectionSearchLabel(title, 'umum');
+  return (
+    <section className="general-section" aria-labelledby={label.id}>
+      <div>
+        <h2 id={label.id} className="flex items-center gap-2 text-[0.9375rem] font-medium text-foreground"><Icon className="size-4 shrink-0" aria-hidden="true" /><span>{label.content}</span></h2>
+        <p className="mt-1 max-w-sm text-sm leading-relaxed text-muted">{description}</p>
+      </div>
+      <div className="general-section-controls">{children}</div>
+    </section>
+  );
+}
 
 export function GeneralTab() {
   const api = useApi();
@@ -21,33 +42,37 @@ export function GeneralTab() {
   const admin = !!company?.permissions.manage_settings;
   const [edited, setEdited] = useState<string | null>(null);
   const name = edited ?? company?.company_name ?? '';
-  const setName = (value: string) => setEdited(value);
   const [state, setState] = useState<SearchState | null>(null);
   const [text, setText] = useState('');
   const [locked, setLocked] = useState(false);
   const [filterOn, setFilterOn] = useState(true);
   const [busy, setBusy] = useState('');
-  const [modeJob, setModeJob] = useState<{ status: string; error?: string } | null>(null);
+  const [modeJob, setModeJob] = useState<Job | null>(null);
+  const [loadError, setLoadError] = useState('');
   const modeProcessing = modeJob?.status === 'queued' || modeJob?.status === 'processing';
 
   useEffect(() => {
     if (!modeProcessing) return;
     const timer = window.setInterval(() => {
-      void api.get<{ status: string; error?: string } | null>('/index/status').then((job) => {
+      void api.get<Job | null>('/index/status').then((job) => {
         setModeJob(job);
         if (job?.status === 'completed') { refresh(); toast.success('Pencocokan selesai diperbarui.'); }
-      }).catch((reason) => { setModeJob({ status: 'failed', error: errorMessage(reason) }); });
+      }).catch((reason) => setModeJob({ status: 'failed', error: errorMessage(reason) }));
     }, 2500);
     return () => window.clearInterval(timer);
   }, [api, modeProcessing, refresh]);
 
   useEffect(() => {
+    let alive = true;
     void api.get<SearchState>('/search-default').then((value) => {
+      if (!alive) return;
       setState(value);
       setText(toLines(admin ? value.company_terms : (value.personal_terms ?? value.company_terms)));
       setLocked(value.locked);
       setFilterOn(value.company_terms.length > 0 || !admin);
-    }).catch((reason) => toast.danger(errorMessage(reason)));
+      setLoadError('');
+    }).catch((reason) => { if (alive) setLoadError(errorMessage(reason)); });
+    return () => { alive = false; };
   }, [api, admin]);
 
   async function run<T>(label: string, job: () => Promise<T>, done: string) {
@@ -57,102 +82,89 @@ export function GeneralTab() {
 
   const terms = fromText(text);
   const tooMany = terms.length > 20;
+  const unchanged = !!state && filterOn === (state.company_terms.length > 0) && (!filterOn || toLines(terms) === toLines(state.company_terms)) && locked === state.locked;
+  const noWatchlist = !company?.tracked_phones.length;
 
   return (
-    <div className="space-y-5">
-      <Panel title={<span className="flex items-center gap-2"><Building2 className="size-5 text-accent" aria-hidden="true" />Nama company</span>}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <TextField value={name} onChange={setName} isDisabled={!admin} fullWidth className="sm:max-w-md"><Label className="text-base font-bold">Nama yang tampil di aplikasi</Label><Input className="h-12 text-base" maxLength={120} /></TextField>
-          {admin && <Button size="lg" isPending={busy === 'name'} isDisabled={!name.trim() || name.trim() === company?.company_name} onPress={() => void run('name', async () => { await api.put('/company/settings', { company_name: name.trim() }); setEdited(null); }, 'Nama company disimpan')}><Save className="size-4" aria-hidden="true" />Simpan</Button>}
+    <div className="general-settings">
+      <GeneralSection icon={Building2} title="Nama company" description="Nama perusahaan yang ditampilkan di aplikasi.">
+        <div className="flex items-center gap-2">
+          <TextField aria-label="Nama company" value={name} onChange={setEdited} isDisabled={!admin || !!busy} fullWidth className="min-w-0 flex-1">
+            <Input maxLength={120} />
+          </TextField>
+          {admin && <Button className="shrink-0" isPending={busy === 'name'} isDisabled={!!busy || !name.trim() || name.trim() === company?.company_name}
+            onPress={() => void run('name', async () => { await api.put('/company/settings', { company_name: name.trim() }); setEdited(null); }, 'Nama company disimpan')}><Save className="size-4" aria-hidden="true" />Simpan</Button>}
         </div>
-      </Panel>
+      </GeneralSection>
 
-      <Panel title="Mode pencocokan otomatis" description="Berlaku di Cocokkan, Match Terbaru, dashboard, dan export. Buyer → Listing wajib bersumber dari buyer perusahaan; Listing → Buyer wajib bersumber dari listing perusahaan. Pasangan dicari dari data yang tersedia di perusahaan ini.">
-        <Segmented<MatchingMode> label="Cocokkan berdasarkan" value={company?.matching_mode ?? 'company'} fullWidth isDisabled={!admin || !!busy || modeProcessing}
-          onChange={(matching_mode) => { void run('mode', async () => { await api.put('/company/settings', { matching_mode }); setModeJob(await api.post<{ status: string }>('/index/recompute')); }, 'Mode disimpan. Aturan langsung berlaku; hasil diperbarui di latar belakang.'); }}
-          options={[{ id: 'company', label: 'Company (keyword)' }, { id: 'sales', label: 'Sales (watchlist)' }]} />
-        {(busy === 'mode' || modeProcessing) && <div className="mt-3"><LoadingIndicator message={modeJob?.status === 'queued' ? 'Aturan langsung berlaku. Pembaruan hasil menunggu antrean…' : 'Memperbarui hasil pencocokan sesuai aturan perusahaan di latar belakang…'} /></div>}
-        {modeJob?.status === 'failed' && <Notice status="danger">{modeJob.error || 'Pencocokan belum berhasil diperbarui.'}</Notice>}
-        <p className="mt-3 text-sm text-muted">{admin ? 'Mode Sales memerlukan minimal satu nomor di watchlist Stok Sales.' : 'Hanya super admin yang dapat mengubah mode pencocokan otomatis.'}</p>
-      </Panel>
+      <GeneralSection icon={Workflow} title="Mode pencocokan otomatis" description="Menentukan sumber buyer dan listing untuk Cocokkan, Match Terbaru, Beranda, dan ekspor.">
+        <div className="general-native-field">
+          <span className="relative block">
+            <select aria-label="Mode pencocokan otomatis" value={company?.matching_mode ?? 'company'} disabled={!admin || !!busy || modeProcessing}
+              onChange={(event) => { const matching_mode = event.target.value as MatchingMode; void run('mode', async () => { await api.put('/company/settings', { matching_mode }); setModeJob(await api.post<Job>('/index/recompute')); }, 'Mode disimpan. Hasil diperbarui di latar belakang.'); }}>
+              <option value="company">Company — kata kunci</option><option value="sales" disabled={noWatchlist}>Sales — nomor dalam watchlist</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+          </span>
+        </div>
+        <GeneralNote>{company?.matching_mode === 'sales' ? 'Sumber wajib mencantumkan nomor sales yang dipantau.' : 'Sumber mengikuti kata kunci company, termasuk yang tertulis di tanda tangan pesan.'}{' '}{admin ? <>Langsung tersimpan saat dipilih.{noWatchlist ? ' Tambahkan nomor di Pantau Sales untuk memakai mode Sales.' : ''}</> : 'Mode dikelola oleh super admin company.'}</GeneralNote>
+        {(busy === 'mode' || modeProcessing) && <output className="flex items-center gap-2 text-sm text-muted" aria-live="polite"><LoaderCircle className="size-4 animate-spin" aria-hidden="true" />{modeJob?.status === 'queued' ? 'Pembaruan hasil menunggu antrean…' : 'Memperbarui hasil pencocokan…'}</output>}
+        {modeJob?.status === 'failed' && <p role="alert" className="text-sm text-danger">{modeJob.error || 'Pencocokan belum berhasil diperbarui.'}</p>}
+      </GeneralSection>
 
-      <Panel title={<span className="flex items-center gap-2"><Search className="size-5 text-accent" aria-hidden="true" />Kata kunci pencarian</span>}
-        description="Pada mode Company, sumber buyer atau listing wajib memuat salah satu kata atau frasa ini, termasuk dalam tanda tangan pesan. Satu kata/frasa per baris, atau pisahkan dengan koma. Maksimal 20.">
-        {!state && <p className="text-base text-muted">Memuat…</p>}
-        {state && admin && (
-          <div className="space-y-4">
-            <Switch isSelected={filterOn} onChange={setFilterOn}>
-              <Switch.Content><Switch.Control><Switch.Thumb /></Switch.Control>
-                <span className="text-base font-bold">Saring pesan dengan kata kunci
-                  <span className="mt-0.5 block text-[0.95rem] font-normal text-muted">{filterOn ? 'Sumber pencocokan wajib memuat kata kunci di bawah.' : 'Semua pesan perusahaan dapat menjadi sumber, tanpa saringan kata kunci.'}</span></span>
-              </Switch.Content>
+      <GeneralSection icon={Search} title="Kata kunci pencarian" description="Pada mode Company, sumber harus memuat salah satu kata atau frasa. Maksimal 20, dipisahkan baris atau koma.">
+        {!state && <p className={loadError ? 'text-sm text-danger' : 'text-sm text-muted'} role={loadError ? 'alert' : undefined}>{loadError || 'Memuat kata kunci…'}</p>}
+        {company?.matching_mode === 'sales' && <p className="text-sm text-muted">Kata kunci disimpan untuk digunakan ketika mode Company aktif.</p>}
+        {state && admin && <>
+          <Switch isSelected={filterOn} onChange={setFilterOn} isDisabled={!!busy}>
+            <Switch.Content><Switch.Control><Switch.Thumb /></Switch.Control><span className="text-sm font-normal"><SearchLabel>Saring pesan dengan kata kunci</SearchLabel></span></Switch.Content>
+          </Switch>
+          {filterOn ? <>
+            <TextField value={text} onChange={setText} fullWidth isInvalid={tooMany} isDisabled={!!busy}>
+              <Label><SearchLabel>Kata kunci company</SearchLabel></Label><TextArea rows={4} placeholder={'konig\nProperty Citraland'} />
+            </TextField>
+            <p className={tooMany ? 'text-xs text-danger' : 'text-xs text-muted'} aria-live="polite">{terms.length}/20 kata atau frasa{tooMany ? ' — maksimal 20.' : ''}</p>
+          </> : <p className="text-sm text-muted">Semua pesan perusahaan dapat menjadi sumber, tanpa saringan kata kunci.</p>}
+          <div className="space-y-1">
+            <Switch isSelected={locked} onChange={setLocked} isDisabled={!!busy}>
+              <Switch.Content><Switch.Control><Switch.Thumb /></Switch.Control><span className="text-sm font-normal"><SearchLabel>Kunci kata kunci untuk semua anggota</SearchLabel></span></Switch.Content>
             </Switch>
-            {filterOn && (
-              <>
-                <TextField value={text} onChange={setText} fullWidth isInvalid={tooMany}>
-                  <Label className="text-base font-bold">Kata kunci company</Label>
-                  <TextArea rows={5} className="text-base" placeholder={'konig\nProperty Citraland'} />
-                </TextField>
-                <div className="flex flex-wrap gap-2">{terms.map((term) => <Chip key={term} variant="soft" color="accent" size="lg">{term}</Chip>)}</div>
-                {tooMany && <Notice status="danger">Maksimal 20 kata atau frasa.</Notice>}
-              </>
-            )}
-            <div className="rounded-2xl border border-border bg-background p-4">
-              <Switch isSelected={locked} onChange={setLocked}>
-                <Switch.Content><Switch.Control><Switch.Thumb /></Switch.Control>
-                  <span className="text-base font-bold"><LockKeyhole className="mr-1.5 inline size-4" aria-hidden="true" />Kunci kata kunci untuk semua anggota
-                    <span className="mt-0.5 block text-[0.95rem] font-normal text-muted">Bila aktif, anggota tim tidak bisa mengubah filter kata kunci. Bila tidak, anggota boleh menambahkan filter sendiri untuk mempersempit sumber yang sudah sesuai aturan perusahaan.</span></span>
-                </Switch.Content>
-              </Switch>
-            </div>
-            <Button size="lg" isPending={busy === 'terms'}
-              isDisabled={(filterOn && (!terms.length || tooMany)) || (filterOn === state.company_terms.length > 0 && (!filterOn || toLines(terms) === toLines(state.company_terms)) && locked === state.locked)}
-              onPress={() => void run('terms', async () => { const saved = await api.put<SearchState>('/search-default', filterOn ? { terms, locked } : { terms: [], clear: true, locked }); setState(saved); setText(toLines(saved.company_terms)); setLocked(saved.locked); setFilterOn(saved.company_terms.length > 0); if (company?.matching_mode === 'company') setModeJob(await api.get<{ status: string; error?: string } | null>('/index/status').catch(() => null)); }, 'Kata kunci disimpan. Aturan perusahaan langsung berlaku.')}>
-              <Save className="size-4" aria-hidden="true" />Simpan kata kunci
-            </Button>
+            <p className="text-sm leading-relaxed text-muted">Anggota memakai kata kunci company. Jika tidak dikunci, anggota dapat menambahkan filter pribadi.</p>
           </div>
-        )}
-        {state && !admin && (
-          <div className="space-y-4">
-            {state.locked ? (
-              <div className="flex flex-col items-center gap-3 rounded-2xl bg-warning-soft p-5 text-center sm:flex-row sm:text-left">
-                <LottiePlayer name="padlock" className="w-24 shrink-0" />
-                <div><p className="text-lg font-bold">Dikunci oleh super admin</p><p className="mt-1 text-base">Kata kunci company dipakai untuk semua anggota dan tidak dapat diubah dari akun Anda.</p>
-                  <div className="mt-3 flex flex-wrap gap-2">{state.company_terms.map((term) => <Chip key={term} size="lg" variant="soft" color="warning">{term}</Chip>)}</div></div>
-              </div>
-            ) : (
-              <>
-                <div><p className="mb-2 text-base font-bold">Default company</p>{state.company_terms.length ? <div className="flex flex-wrap gap-2">{state.company_terms.map((term) => <Chip key={term} size="lg" variant="soft">{term}</Chip>)}</div> : <p className="text-base text-muted">Company belum memakai kata kunci, jadi semua pesan dipakai.</p>}</div>
-                <TextField value={text} onChange={setText} fullWidth isInvalid={tooMany}>
-                  <Label className="text-base font-bold">Kata kunci saya</Label>
-                  <TextArea rows={4} className="text-base" />
-                </TextField>
-                <p className="text-sm text-muted">Filter tambahan ini hanya berlaku untuk akun Anda dan mempersempit sumber yang sudah sesuai keyword perusahaan.</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="lg" isPending={busy === 'personal'} isDisabled={!terms.length || tooMany}
-                    onPress={() => void run('personal', async () => { const saved = await api.put<SearchState>('/search-default/personal', { terms }); setState(saved); }, 'Kata kunci Anda disimpan')}><Save className="size-4" aria-hidden="true" />Simpan kata kunci saya</Button>
-                  <Button size="lg" variant="secondary" isPending={busy === 'reset'} isDisabled={!state.personal_terms}
-                    onPress={() => void run('reset', async () => { const saved = await api.del<SearchState>('/search-default/personal'); setState(saved); setText(toLines(saved.company_terms)); }, 'Kembali memakai default company')}><RotateCcw className="size-4" aria-hidden="true" />Pakai default company</Button>
-                </div>
-              </>
-            )}
+          <Button className="self-start" isPending={busy === 'terms'} isDisabled={!!busy || (filterOn && (!terms.length || tooMany)) || unchanged}
+            onPress={() => void run('terms', async () => { const saved = await api.put<SearchState>('/search-default', filterOn ? { terms, locked } : { terms: [], clear: true, locked }); setState(saved); setText(toLines(saved.company_terms)); setLocked(saved.locked); setFilterOn(saved.company_terms.length > 0); if (company?.matching_mode === 'company') setModeJob(await api.get<Job | null>('/index/status').catch(() => null)); }, 'Kata kunci disimpan. Aturan perusahaan langsung berlaku.')}>
+            <Save className="size-4" aria-hidden="true" />Simpan kata kunci
+          </Button>
+        </>}
+        {state && !admin && (state.locked ? <>
+          <p className="flex items-center gap-2 text-sm text-foreground"><LockKeyhole className="size-4 shrink-0" aria-hidden="true" />Dikunci oleh super admin</p>
+          <p className="text-sm text-muted">{state.company_terms.length ? state.company_terms.join(' · ') : 'Company tidak memakai saringan kata kunci.'}</p>
+        </> : <>
+          <div className="space-y-1"><p className="text-sm font-medium"><SearchLabel>Default company</SearchLabel></p><p className="text-sm text-muted">{state.company_terms.length ? state.company_terms.join(' · ') : 'Semua pesan dipakai; company belum mengatur kata kunci.'}</p></div>
+          <TextField value={text} onChange={setText} fullWidth isInvalid={tooMany} isDisabled={!!busy}>
+            <Label><SearchLabel>Kata kunci saya</SearchLabel></Label><TextArea rows={4} />
+          </TextField>
+          <p className={tooMany ? 'text-xs text-danger' : 'text-xs text-muted'}>{terms.length}/20 kata atau frasa{tooMany ? ' — maksimal 20.' : ''}</p>
+          <p className="text-sm text-muted">Filter pribadi mempersempit sumber yang sesuai aturan perusahaan.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button isPending={busy === 'personal'} isDisabled={!!busy || !terms.length || tooMany} onPress={() => void run('personal', async () => { setState(await api.put<SearchState>('/search-default/personal', { terms })); }, 'Kata kunci Anda disimpan')}><Save className="size-4" aria-hidden="true" />Simpan kata kunci saya</Button>
+            <Button variant="secondary" isPending={busy === 'reset'} isDisabled={!!busy || !state.personal_terms} onPress={() => void run('reset', async () => { const saved = await api.del<SearchState>('/search-default/personal'); setState(saved); setText(toLines(saved.company_terms)); }, 'Kembali memakai default company')}><RotateCcw className="size-4" aria-hidden="true" />Pakai default company</Button>
           </div>
-        )}
-      </Panel>
+        </>)}
+      </GeneralSection>
 
-      <Panel title={<span className="flex items-center gap-2"><Users className="size-5 text-accent" aria-hidden="true" />Pengelompokan listing property</span>}
-        description="Menentukan bagaimana daftar listing dikelompokkan di halaman Cocokkan dan grafik “Listing per sales”.">
-        <div className="space-y-3">
-          <Segmented label="Pengelompokan listing" value={(company?.listing_group_by ?? 'sender') as GroupBy} fullWidth
-            onChange={(next) => { if (!admin) return; void run('group', () => api.put('/company/settings', { listing_group_by: next }), 'Pengelompokan diubah untuk seluruh company'); }}
-            options={[{ id: 'sender', label: 'Pengirim pesan (standar)' }, { id: 'phone', label: 'Nomor telepon di pesan' }]} />
-          <ul className="space-y-1.5 text-base leading-relaxed text-muted">
-            <li><strong className="text-foreground">Pengirim pesan:</strong> nama kontak WhatsApp yang mengirim pesan di grup.</li>
-            <li><strong className="text-foreground">Nomor telepon di pesan:</strong> nomor yang tertulis di tanda tangan tiap pesan listing. Cocok bila satu orang memposting listing milik banyak sales.</li>
-          </ul>
-          {!admin && <p className="text-sm text-muted">Hanya super admin yang dapat mengubah pengaturan ini.</p>}
+      <GeneralSection icon={UsersRound} title="Pengelompokan listing property" description="Cara menyusun daftar listing di Cocokkan dan grafik Listing per sales.">
+        <div className="general-native-field">
+          <span className="relative block">
+            <select aria-label="Pengelompokan listing property" value={company?.listing_group_by ?? 'sender'} disabled={!admin || !!busy}
+              onChange={(event) => { const listing_group_by = event.target.value as GroupBy; void run('group', () => api.put('/company/settings', { listing_group_by }), 'Pengelompokan diubah untuk seluruh company'); }}>
+              <option value="sender">Pengirim pesan</option><option value="phone">Nomor telepon di pesan</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute top-1/2 right-2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+          </span>
         </div>
-      </Panel>
+        <GeneralNote>{company?.listing_group_by === 'phone' ? 'Menggunakan nomor kontak pada pesan listing, termasuk ketika satu orang memposting listing milik sales lain.' : 'Menggunakan nama kontak WhatsApp yang mengirim pesan di grup.'}{' '}{admin ? 'Langsung tersimpan saat dipilih, berlaku untuk seluruh company.' : 'Pengelompokan dikelola oleh super admin company.'}</GeneralNote>
+      </GeneralSection>
     </div>
   );
 }

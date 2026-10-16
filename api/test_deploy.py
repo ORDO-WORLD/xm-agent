@@ -11,6 +11,22 @@ from fastapi import HTTPException
 import deploy
 
 
+class DeployPlatformTests(unittest.TestCase):
+    def test_disabled_without_posix_locks_even_with_existing_script(self):
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / 'deploy.sh'
+            script.write_text('exit 0\n')
+            with patch.object(deploy, 'fcntl', None), patch.dict(
+                os.environ, {'XM_DEPLOY_SCRIPT': str(script)}
+            ):
+                self.assertEqual(deploy.status(), {'enabled': False})
+                with self.assertRaises(HTTPException) as raised:
+                    deploy.start()
+                self.assertEqual(raised.exception.status_code, 404)
+                self.assertFalse((Path(folder) / 'data').exists())
+
+
+@unittest.skipIf(deploy.fcntl is None, 'deployment requires POSIX locks and bash')
 class DeployTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

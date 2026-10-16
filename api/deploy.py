@@ -4,12 +4,18 @@ The script restarts this very API, so it runs detached from it and every bit of
 state lives in files: a lock held while it runs, its output, and its exit code.
 Enabled only where ``XM_DEPLOY_SCRIPT`` points at an existing script.
 """
-import fcntl
 import os
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import fcntl
+except ModuleNotFoundError:
+    # Dashboard deployment uses POSIX locks and bash; local Windows APIs can
+    # still run with this optional server feature disabled.
+    fcntl = None
 
 from fastapi import APIRouter, HTTPException
 
@@ -26,6 +32,8 @@ RUNNER = 'exec 9<&0; ( bash "$1" </dev/null >"$2" 2>&1 9<&-; echo $? >"$3" ) </d
 
 
 def script_path() -> Path | None:
+    if fcntl is None:
+        return None
     configured = os.getenv('XM_DEPLOY_SCRIPT', '').strip()
     path = Path(configured) if configured else None
     return path if path and path.is_file() else None

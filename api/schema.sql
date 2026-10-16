@@ -418,6 +418,8 @@ CREATE TABLE IF NOT EXISTS xm.integration_keys (
  revoked_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS integration_keys_company_idx ON xm.integration_keys(company_id);
+-- User acknowledgement only; it does not change key authentication or export access.
+ALTER TABLE xm.integration_keys ADD COLUMN IF NOT EXISTS saved_at timestamptz;
 CREATE TABLE IF NOT EXISTS xm.export_jobs (
  id uuid PRIMARY KEY,
  company_id text NOT NULL,

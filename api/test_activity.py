@@ -218,11 +218,19 @@ class ViewTests(ActivityCase):
     def test_older_pages_follow_the_cursor(self):
         for index in range(3):
             self.call(self.boss, '/stock/snapshot', 'POST')
-        first = self.call(self.admin, f"/admin/activity?company={self.company['company_id']}&action=stock.snapshot&limit=2")
+        first = self.call(self.admin, f"/admin/activity?company={self.company['company_id']}&action=stock.snapshot&limit=2&include_total=true")
         self.assertEqual(len(first['rows']), 2)
+        self.assertEqual(first['total'], 3)
         rest = self.call(self.admin, f"/admin/activity?company={self.company['company_id']}&action=stock.snapshot&limit=2&before={first['next']}")
         self.assertEqual(len(rest['rows']), 1)
         self.assertIsNone(rest['next'])
+        self.assertIsNone(rest['total'])
+        counted = self.call(self.admin, f"/admin/activity?company={self.company['company_id']}&action=stock.snapshot&limit=2&before={first['next']}&include_total=true")
+        self.assertEqual(counted['total'], 3)
+        numbered = self.call(self.admin, f"/admin/activity?company={self.company['company_id']}&action=stock.snapshot&limit=2&offset=2")
+        self.assertEqual([row['id'] for row in numbered['rows']], [row['id'] for row in rest['rows']])
+        self.call(self.admin, '/admin/activity?offset=-1', status=400)
+        self.call(self.admin, f"/admin/activity?offset=2&before={first['next']}", status=400)
         self.assertEqual(len({row['id'] for row in first['rows'] + rest['rows']}), 3)
 
 

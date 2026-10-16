@@ -8,16 +8,17 @@ import { NumberTicker } from '@/components/magicui/number-ticker';
 import { STATUS_LABELS } from '@/lib/format';
 import type { EntityStatus, Temperature } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { useSectionSearchLabel } from '@/lib/section-search';
 
 /* --------------------------------------------------------------- page layout */
 
 export function PageHeader({ title, description, actions, eyebrow }: { title: string; description?: ReactNode; actions?: ReactNode; eyebrow?: ReactNode }) {
   return (
-    <header className="mb-5 flex flex-col gap-3 sm:mb-7 sm:flex-row sm:items-end sm:justify-between">
+    <header className="mb-5 flex flex-col gap-3 border-b border-separator pb-5 sm:mb-6 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         {eyebrow && <p className="mb-1 text-sm font-semibold text-accent">{eyebrow}</p>}
-        <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{title}</h1>
-        {description && <p className="mt-1.5 max-w-3xl text-base leading-relaxed text-muted">{description}</p>}
+        <h1 className="app-page-title text-2xl font-semibold tracking-tight text-foreground sm:text-[1.75rem]">{title}</h1>
+        {description && <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-muted sm:text-[0.9375rem]">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </header>
@@ -27,12 +28,13 @@ export function PageHeader({ title, description, actions, eyebrow }: { title: st
 export function Panel({ title, description, action, children, className, bodyClassName }: {
   title?: ReactNode; description?: ReactNode; action?: ReactNode; children: ReactNode; className?: string; bodyClassName?: string;
 }) {
+  const sectionLabel = useSectionSearchLabel(title);
   return (
     <section className={cn('xm-card min-w-0', className)}>
       {(title || action) && (
         <div className="flex flex-wrap items-start justify-between gap-3 px-4 pt-4 sm:px-5 sm:pt-5">
           <div className="min-w-0">
-            {title && <h2 className="text-lg font-bold text-foreground">{title}</h2>}
+            {title && <h2 id={sectionLabel.id} className="scroll-mt-6 text-base font-semibold text-foreground">{sectionLabel.content}</h2>}
             {description && <p className="mt-0.5 text-sm leading-relaxed text-muted">{description}</p>}
           </div>
           {action}
@@ -233,14 +235,15 @@ export function Segmented<T extends string>({ value, onChange, options, label, f
 }
 
 /** A confirmation that names what will happen, with a plain way back. */
-export function ConfirmDialog({ open, onOpenChange, title, children, confirmLabel, status = 'danger', busy, onConfirm }: {
+export function ConfirmDialog({ open, onOpenChange, title, children, confirmLabel, status = 'danger', busy, onConfirm, className }: {
   open: boolean; onOpenChange: (open: boolean) => void; title: string; children: ReactNode; confirmLabel: string;
   status?: 'danger' | 'warning' | 'accent'; busy?: boolean; onConfirm: () => void;
+  className?: string;
 }) {
   return (
     <AlertDialog.Backdrop isOpen={open} onOpenChange={onOpenChange}>
       <AlertDialog.Container>
-        <AlertDialog.Dialog className="sm:max-w-[440px]">
+        <AlertDialog.Dialog className={cn('sm:max-w-[440px]', className)}>
           <AlertDialog.Header>
             <AlertDialog.Icon status={status}>{status === 'danger' ? <TriangleAlert /> : undefined}</AlertDialog.Icon>
             <AlertDialog.Heading>{title}</AlertDialog.Heading>

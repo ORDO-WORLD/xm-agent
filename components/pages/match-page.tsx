@@ -438,7 +438,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
       </div>
 
       {bulkMode && (
-        <div className="pb-safe fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 rounded-3xl border border-border bg-surface p-3 shadow-2xl lg:inset-x-auto lg:bottom-6 lg:left-[calc(18rem+2.5rem)] lg:right-10">
+        <div className="pb-safe fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 rounded-3xl border border-border bg-surface p-3 shadow-2xl lg:inset-x-auto lg:bottom-6 lg:left-[calc(var(--app-sidebar-width)+var(--app-gutter)+var(--app-content-inset))] lg:right-[calc(var(--app-gutter)+var(--app-content-inset))]">
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-2 text-base font-bold">{number(bulkRows.length)} dipilih</span>
             <Button variant="secondary" isPending={selectingAll} onPress={selectAll}><ListChecks className="size-4" aria-hidden="true" />Pilih semua</Button>

@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { Button, Description, Label, Modal, TextArea, TextField, toast, type useOverlayState } from '@heroui/react';
-import { Notice } from '@/components/app/primitives';
+import { PhoneCall } from 'lucide-react';
+import { SettingsNote } from '@/components/settings/settings-section';
 import { errorMessage } from '@/lib/api';
 import { formatPhone, normalizePhone } from '@/lib/format';
 import { useCompany } from '@/lib/session';
@@ -13,22 +14,22 @@ const PHONE = /^628\d{8,12}$/;
 
 /** One box for many numbers, separated by commas. The list below the box shows what was understood. */
 export function TrackedEditor({ state, current, onSaved }: { state: ReturnType<typeof useOverlayState>; current: StockTracked[]; onSaved: () => void }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <Modal.Backdrop isOpen={state.isOpen} onOpenChange={(open) => state.setOpen(open)}>
-      <Modal.Container size="lg" scroll="inside">
+    <Modal.Backdrop isOpen={state.isOpen} isDismissable={!busy} isKeyboardDismissDisabled={busy} onOpenChange={(open) => { if (!busy) state.setOpen(open); }}>
+      <Modal.Container placement="center" size="lg" scroll="inside">
         {/* The form is mounted each time the dialog opens, so it always starts from what is saved. */}
-        <Modal.Dialog><TrackedForm current={current} onClose={() => state.close()} onSaved={onSaved} /></Modal.Dialog>
+        <Modal.Dialog className="general-settings sales-edit-dialog stock-tracked-dialog"><TrackedForm current={current} busy={busy} setBusy={setBusy} onClose={() => state.close()} onSaved={onSaved} /></Modal.Dialog>
       </Modal.Container>
     </Modal.Backdrop>
   );
 }
 
-function TrackedForm({ current, onClose, onSaved }: { current: StockTracked[]; onClose: () => void; onSaved: () => void }) {
+function TrackedForm({ current, busy, setBusy, onClose, onSaved }: { current: StockTracked[]; busy: boolean; setBusy: (busy: boolean) => void; onClose: () => void; onSaved: () => void }) {
   const api = useApi();
   const { company } = useCompany();
   const [text, setText] = useState(() => current.map((item) => item.phone).join(', '));
   const [labels, setLabels] = useState<Record<string, string>>(() => Object.fromEntries(current.filter((item) => item.label).map((item) => [item.phone, item.label as string])));
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   const parsed = useMemo(() => {
@@ -40,6 +41,7 @@ function TrackedForm({ current, onClose, onSaved }: { current: StockTracked[]; o
   }, [text]);
 
   async function save() {
+    if (busy || parsed.invalid.length > 0 || parsed.valid.length > 50) return;
     setBusy(true); setError('');
     try {
       await api.put('/stock/tracked', { phones: parsed.valid.map((row) => row.phone), labels });
@@ -52,36 +54,36 @@ function TrackedForm({ current, onClose, onSaved }: { current: StockTracked[]; o
 
   return (
     <>
-      <Modal.CloseTrigger />
-      <Modal.Header><Modal.Heading>Atur nomor sales yang dipantau</Modal.Heading></Modal.Header>
-      <Modal.Body className="space-y-4">
-        <Notice status="accent">Pengaturan ini berlaku untuk <strong>seluruh company</strong>. Sistem menghitung listing yang mencantumkan nomor itu di pesannya, dan mencatatnya otomatis setiap upload.</Notice>
-        <p className="text-sm leading-relaxed text-muted">Pada mode Sales, watchlist langsung membatasi sumber di Cocokkan, Match Terbaru, dashboard, dan export. Perubahan nomor juga memperbarui hasil pencocokan di latar belakang.</p>
-        <TextField value={text} onChange={setText} fullWidth>
-          <Label className="text-base font-bold">Nomor telepon (pisahkan dengan koma)</Label>
-          <TextArea rows={4} className="text-base" placeholder="6282233744657, 6281202310022" />
-          <Description className="text-sm">Boleh diawali 08… atau 628…. Maksimal 50 nomor. Nomor yang sama hanya dihitung sekali.</Description>
+      {!busy && <Modal.CloseTrigger />}
+      <Modal.Header><Modal.Heading className="flex items-center gap-2"><PhoneCall className="size-4" aria-hidden="true" />Atur nomor sales</Modal.Heading></Modal.Header>
+      <Modal.Body className="sales-dialog-body space-y-4">
+        <SettingsNote>Berlaku untuk seluruh company. Listing dikenali dari nomor kontak yang tercantum dalam pesan. {company?.matching_mode === 'sales' && 'Perubahan nomor juga memperbarui hasil pencocokan pada mode Sales.'}</SettingsNote>
+        <TextField value={text} onChange={setText} isDisabled={busy} fullWidth>
+          <Label>Nomor telepon</Label>
+          <TextArea rows={4} placeholder="6282233744657, 6281202310022" />
+          <Description className="text-xs">Pisahkan dengan koma atau baris baru. Awalan 08 atau 628, maksimal 50 nomor. Nomor duplikat dihitung sekali.</Description>
         </TextField>
-        {parsed.invalid.length > 0 && <Notice status="danger" title="Nomor ini tidak dikenali">{parsed.invalid.map((row) => row.raw).join(', ')} — gunakan nomor seluler Indonesia.</Notice>}
+        {parsed.invalid.length > 0 && <SettingsNote tone="danger">Nomor tidak dikenali: {parsed.invalid.map((row) => row.raw).join(', ')}. Gunakan nomor seluler Indonesia.</SettingsNote>}
+        {parsed.valid.length > 50 && <SettingsNote tone="danger">Maksimal 50 nomor dapat dipantau.</SettingsNote>}
         {parsed.valid.length > 0 && (
           <div>
-            <p className="mb-2 text-base font-bold">{parsed.valid.length} nomor akan dipantau</p>
-            <ul className="space-y-2">
+            <div className="stock-tracked-heading"><h3>{parsed.valid.length} nomor akan dipantau</h3><span>Nama sales opsional</span></div>
+            <ul className="stock-tracked-list">
               {parsed.valid.map((row) => (
-                <li key={row.phone} className="flex flex-wrap items-center gap-2 rounded-xl bg-background p-2.5">
-                  <span className="min-w-40 text-base font-semibold">{formatPhone(row.phone)}</span>
+                <li key={row.phone}>
+                  <span>{formatPhone(row.phone)}</span>
                   <input aria-label={`Nama untuk ${row.phone}`} value={labels[row.phone] ?? ''} onChange={(event) => setLabels((currentLabels) => ({ ...currentLabels, [row.phone]: event.target.value }))}
-                    maxLength={80} placeholder="Nama sales (opsional)" className="h-11 min-w-0 flex-1 rounded-xl border border-field-border bg-field px-3 text-base" />
+                    maxLength={80} disabled={busy} placeholder="Nama sales" className="input" />
                 </li>
               ))}
             </ul>
           </div>
         )}
-        {error && <Notice status="danger">{error}</Notice>}
+        {error && <SettingsNote tone="danger">{error}</SettingsNote>}
       </Modal.Body>
       <Modal.Footer>
-        <Button slot="close" variant="tertiary" size="lg">Batal</Button>
-        <Button size="lg" isPending={busy} isDisabled={parsed.invalid.length > 0 || parsed.valid.length > 50} onPress={save}>Simpan</Button>
+        <Button variant="secondary" isDisabled={busy} onPress={onClose}>Batal</Button>
+        <Button isPending={busy} isDisabled={parsed.invalid.length > 0 || parsed.valid.length > 50} onPress={save}>Simpan</Button>
       </Modal.Footer>
     </>
   );

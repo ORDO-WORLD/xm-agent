@@ -157,7 +157,10 @@ def _day(value, label):
 
 @router.get('')
 def list_activity(company: str = '', actor: str = '', action: str = '', layers: str = 'change,account,export',
-                  date_from: str = '', date_to: str = '', q: str = '', before: str = '', limit: int = 50):
+                  date_from: str = '', date_to: str = '', q: str = '', before: str = '', limit: int = 50,
+                  include_total: bool = False, offset: int = 0):
+    if offset < 0 or (before and offset):
+        raise HTTPException(400, 'Posisi halaman tidak valid.')
     chosen = [item for item in dict.fromkeys(layers.split(',')) if item in LAYERS]
     clauses, params = ['layer = ANY(%s)'], [chosen]
     if company:
@@ -180,6 +183,7 @@ def list_activity(company: str = '', actor: str = '', action: str = '', layers: 
     if q.strip():
         clauses.append("(summary ILIKE %s OR actor_name ILIKE %s OR coalesce(actor_email,'') ILIKE %s)")
         params += [f'%{q.strip()}%'] * 3
+    count_clauses, count_params = clauses.copy(), params.copy()
     if before:
         try:
             stamp, ident = before.split('_')
@@ -189,17 +193,20 @@ def list_activity(company: str = '', actor: str = '', action: str = '', layers: 
             raise HTTPException(400, 'Penanda halaman tidak valid.') from None
     limit = min(max(limit, 1), 200)
     with connect() as conn:
+        total = conn.execute(
+            'SELECT count(*) AS total FROM xm.activity_log WHERE ' + ' AND '.join(count_clauses),
+            count_params).fetchone()['total'] if include_total else None
         rows = conn.execute(
             """SELECT id, last_at AS at, happened_at AS first_at, layer, action, actor_name, actor_email, actor_role, company_id,
                       company_name, as_admin, failed, summary, details, repeat_count
-               FROM xm.activity_log WHERE """ + ' AND '.join(clauses) + ' ORDER BY last_at DESC, id DESC LIMIT %s',
-            params + [limit + 1]).fetchall()
+               FROM xm.activity_log WHERE """ + ' AND '.join(clauses) + ' ORDER BY last_at DESC, id DESC LIMIT %s OFFSET %s',
+            params + [limit + 1, offset]).fetchall()
     page = rows[:limit]
     for row in page:
         row['action_label'] = ACTIONS.get(row['action'], row['action'])
     # Microseconds since 1970 keep the marker exact and free of characters a URL would mangle.
     marker = f"{(page[-1]['at'] - EPOCH) // timedelta(microseconds=1)}_{page[-1]['id']}" if len(rows) > limit else None
-    return {'rows': page, 'next': marker}
+    return {'rows': page, 'next': marker, 'total': total}
 
 
 @router.get('/filters')

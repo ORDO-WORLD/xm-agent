@@ -73,5 +73,5 @@ export default function Home() {
       </SessionProvider>
     );
   }
-  return <>{screen}<Toast.Provider placement="bottom end" /></>;
+  return <>{screen}<Toast.Provider placement="bottom end" width={320} /></>;
 }

@@ -12,7 +12,7 @@ export const colors = {
 };
 export const categorical = [colors.blue, colors.cyan, colors.amber, colors.violet, colors.green, colors.pink, colors.orange, colors.teal, colors.slate];
 
-const FONT = "'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, sans-serif";
+const FONT = "'Instrument Sans Variable', 'Instrument Sans', ui-sans-serif, system-ui, sans-serif";
 
 Chart.defaults.font.family = FONT;
 Chart.defaults.font.size = 13;
@@ -62,7 +62,7 @@ export const centerText: Plugin<'doughnut'> = {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = colors.ink;
-    ctx.font = `800 28px ${FONT}`;
+    ctx.font = `650 28px ${FONT}`;
     ctx.fillText(text, x, y - (caption ? 8 : 0));
     if (caption) {
       ctx.fillStyle = '#64748b';

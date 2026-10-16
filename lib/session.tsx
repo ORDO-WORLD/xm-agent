@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { LOCKED_EVENT, UNAUTHORIZED_EVENT } from '@/lib/api';
 import type { CompanySettings, Stats, User } from '@/lib/types';
 import { useApi, WorkspaceProvider } from '@/lib/workspace-context';
+import { resetTeamGuideSession } from '@/lib/team-guide-hint';
 
 /* ------------------------------------------------------------------ session */
 
@@ -47,7 +48,7 @@ export function useAuth() {
   useEffect(() => {
     const settle = (next: User | null) => {
       if (next) rememberSso(Boolean(next.sso));
-      else if (renewThroughAutoAudit()) return;
+      else { resetTeamGuideSession(); if (renewThroughAutoAudit()) return; }
       setUser(next);
     };
     const refresh = () => { void fetchMe().then((next) => { settle(next); setFailed(false); }).catch(() => {}); };
@@ -68,6 +69,7 @@ export function useAuth() {
   }, []);
 
   const logout = useCallback(() => {
+    resetTeamGuideSession();
     try { window.sessionStorage.removeItem(MANAGE_KEY); } catch { /* private mode */ }
     rememberSso(false);
     void fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => { window.location.hash = ''; setUser(null); });

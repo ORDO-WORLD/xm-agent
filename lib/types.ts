@@ -162,7 +162,7 @@ export type ActivityRow = {
   actor_name: string; actor_email: string | null; actor_role: string | null; company_id: string | null; company_name: string | null;
   as_admin: boolean; failed: boolean; summary: string; details: Record<string, unknown>; repeat_count: number;
 };
-export type ActivityPage = { rows: ActivityRow[]; next: string | null };
+export type ActivityPage = { rows: ActivityRow[]; next: string | null; total?: number | null };
 export type ActivityFilters = {
   companies: { id: string; name: string }[]; actors: { email: string; name: string }[]; actions: { id: string; label: string }[];
 };

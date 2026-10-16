@@ -44,6 +44,27 @@ class WorkflowIntegrationCase(V4Case):
 
 
 class WorkflowIntegrationTests(WorkflowIntegrationCase):
+    def test_saved_status_requires_explicit_confirmation_and_survives_listing(self):
+        path = f"/integration/keys/{self.key['id']}"
+        self.assertIsNone(self.key['saved_at'])
+        renamed = self.call(self.boss, path, 'PUT', {'name': 'Renamed workflow'})
+        self.assertIsNone(renamed['saved_at'])
+        self.assertNotIn('token', renamed)
+        self.call(self.staff, path, 'PUT', {'name': 'Forbidden', 'confirm_saved': True}, status=403)
+        _, _, other = self.make_company('Other token metadata')
+        self.call(other, path, 'PUT', {'name': 'Forbidden', 'confirm_saved': True}, status=404)
+        saved = self.call(self.boss, path, 'PUT', {'name': 'Renamed workflow', 'confirm_saved': True})
+        self.assertIsNotNone(saved['saved_at'])
+        updated = self.call(self.boss, path, 'PUT', {'name': 'Final name', 'confirm_saved': False})
+        self.assertEqual(updated['saved_at'], saved['saved_at'])
+        listed = self.call(self.boss, '/integration/keys')['keys']
+        self.assertEqual(next(key for key in listed if key['id'] == self.key['id'])['saved_at'], saved['saved_at'])
+        with connect() as conn:
+            digest = conn.execute('SELECT token_hash FROM xm.integration_keys WHERE id=%s', (self.key['id'],)).fetchone()['token_hash']
+        self.assertEqual(digest, hashlib.sha256(self.key['token'].encode()).hexdigest())
+        self.call(self.boss, path, 'DELETE')
+        self.call(self.boss, path, 'PUT', {'name': 'Revoked', 'confirm_saved': True}, status=404)
+
     def test_admin_generates_scoped_key_raw_secret_not_stored_and_revocation(self):
         self.assertEqual(self.key['scope'], 'property:export')
         self.call(self.staff, '/integration/keys', 'POST', {'name': 'no'}, status=403)

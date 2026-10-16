@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useState, type ReactNode } from 'react';
-import { Description, Dropdown, Label, buttonVariants, toast } from '@heroui/react';
-import { CircleCheck, Clock3, EllipsisVertical, PackageCheck, Trash2 } from 'lucide-react';
+import { useCallback, useState, type CSSProperties, type ReactNode } from 'react';
+import { AlertDialog, Button, Description, Dropdown, Label, buttonVariants, toast } from '@heroui/react';
+import { ChevronDown, CircleCheck, Clock3, EllipsisVertical, MessageSquareText, PackageCheck, Trash2 } from 'lucide-react';
 import { ConfirmDialog } from '@/components/app/primitives';
 import { errorMessage } from '@/lib/api';
 import { STATUS_LABELS } from '@/lib/format';
@@ -18,21 +18,23 @@ const OPTIONS: { id: EntityStatus; label: string; hint: string; icon: typeof Cir
 ];
 
 /** The "⋮" on a card: mark it Ready, On-hold, Sold or deleted. */
-export function StatusMenu({ status = 'ready', name, onChoose }: { status?: EntityStatus; name: string; onChoose: (status: EntityStatus) => void }) {
+export function StatusMenu({ status = 'ready', name, onChoose, onPreview, onDetail, textTrigger = false }: { status?: EntityStatus; name: string; onChoose: (status: EntityStatus) => void; onPreview?: () => void; onDetail?: () => void; textTrigger?: boolean }) {
   return (
     <Dropdown>
-      <Dropdown.Trigger aria-label={`Ubah status ${name}`} className={buttonVariants({ variant: 'tertiary', isIconOnly: true, size: 'md' })}>
-        <EllipsisVertical className="size-5" aria-hidden="true" />
+      <Dropdown.Trigger aria-label={`Aksi ${name}`} className={onPreview || textTrigger ? 'recent-card-action' : buttonVariants({ variant: 'tertiary', isIconOnly: true, size: 'md' })}>
+        {onPreview || textTrigger ? <>Aksi<ChevronDown className="size-4" aria-hidden="true" /></> : <EllipsisVertical className="size-5" aria-hidden="true" />}
       </Dropdown.Trigger>
-      <Dropdown.Popover placement="bottom end" className="min-w-64">
-        <Dropdown.Menu aria-label={`Status ${name}`} onAction={(key) => onChoose(key as EntityStatus)}>
+      <Dropdown.Popover placement="bottom end" className={onPreview || textTrigger ? 'min-w-64 recent-card-action-menu' : 'min-w-64'}>
+        <Dropdown.Menu aria-label={`Aksi ${name}`} onAction={(key) => { if (key === 'preview') onPreview?.(); else if (key === 'detail') onDetail?.(); else onChoose(key as EntityStatus); }}>
+          {onDetail && <Dropdown.Item id="detail" textValue="Detail Match"><CircleCheck className="size-5" aria-hidden="true" /><Label>Detail Match</Label></Dropdown.Item>}
+          {onPreview && <Dropdown.Item id="preview" textValue="Preview Pesan Asli"><MessageSquareText className="size-5" aria-hidden="true" /><Label>Preview Pesan Asli</Label></Dropdown.Item>}
           <Dropdown.Section>
             {OPTIONS.map((option) => (
               <Dropdown.Item key={option.id} id={option.id} textValue={option.label} isDisabled={option.id === status} variant={option.id === 'deleted' ? 'danger' : 'default'}>
-                <option.icon className="size-5 shrink-0" aria-hidden="true" />
+                <option.icon className="size-5 shrink-0" style={option.id === 'deleted' ? { color: '#ef2028' } : undefined} aria-hidden="true" />
                 <div className="flex flex-col">
                   <Label className="text-base">{option.id === status ? `${option.label} (saat ini)` : option.id === 'deleted' ? 'Tandai untuk dihapus' : `Tandai ${option.label}`}</Label>
-                  <Description className="text-sm">{option.hint}</Description>
+                  {!onPreview && !textTrigger && <Description className="text-sm">{option.hint}</Description>}
                 </div>
               </Dropdown.Item>
             ))}
@@ -57,7 +59,7 @@ export type StatusRequest = {
  * Applies a status change, asks first when it hides something, and always offers
  * a way back. Render `dialog` somewhere in the page.
  */
-export function useStatusActions(onChanged: () => void): { request: (request: StatusRequest) => void; dialog: ReactNode } {
+export function useStatusActions(onChanged: () => void, confirmChanges = false): { request: (request: StatusRequest) => void; dialog: ReactNode } {
   const api = useApi();
   const { refresh } = useCompany();
   const [pending, setPending] = useState<StatusRequest | null>(null);
@@ -86,9 +88,30 @@ export function useStatusActions(onChanged: () => void): { request: (request: St
   }, [api, onChanged, refresh]);
 
   const request = useCallback((next: StatusRequest) => {
-    if (next.status === 'deleted') setPending(next);
+    if (next.status === 'deleted' || (confirmChanges && next.status !== 'ready')) setPending(next);
     else void apply(next);
-  }, [apply]);
+  }, [apply, confirmChanges]);
+
+  if (confirmChanges) {
+    const status = pending?.status ?? 'deleted';
+    const option = OPTIONS.find((item) => item.id === status)!;
+    const Icon = option.icon;
+    const color = status === 'on_hold' ? '#d97706' : status === 'sold' ? '#0a3be0' : '#ed1c24';
+    const soft = status === 'on_hold' ? '#fffbeb' : status === 'sold' ? '#eff6ff' : '#fff1f2';
+    const label = status === 'deleted' ? 'Hapus' : STATUS_LABELS[status];
+    const dialog = <AlertDialog.Backdrop isOpen={!!pending} isDismissable={!busy} isKeyboardDismissDisabled={busy} onOpenChange={(open) => { if (!open && !busy) setPending(null); }} className="company-logout-backdrop">
+      <AlertDialog.Container placement="center" className="company-logout-container">
+        <AlertDialog.Dialog className="company-logout-dialog recent-status-dialog" style={{ '--status-color': color, '--status-soft': soft } as CSSProperties}>
+          <div className="company-logout-intro">
+            <AlertDialog.Header className="company-logout-heading"><div className="company-logout-icon"><Icon className="size-7" aria-hidden="true" /></div><AlertDialog.Heading>{status === 'deleted' ? 'Tandai untuk dihapus?' : `Tandai ${label}?`}</AlertDialog.Heading></AlertDialog.Header>
+            <AlertDialog.Body className="company-logout-message"><strong>{pending?.name}</strong>{status === 'deleted' ? ' akan disembunyikan dari daftar dan pencocokan. Data dapat dipulihkan lewat filter Dihapus.' : status === 'on_hold' ? ' akan ditandai On-hold. Data ditampilkan saat filter On-hold disertakan.' : ' akan ditandai Sold. Data ditampilkan saat filter Sold disertakan.'}</AlertDialog.Body>
+          </div>
+          <AlertDialog.Footer className="company-logout-actions"><Button variant="secondary" className="company-logout-cancel" isDisabled={busy} onPress={() => setPending(null)}>Batal</Button><Button variant="primary" className="company-logout-confirm" isPending={busy} onPress={() => { if (pending && !busy) void apply(pending); }}>{status === 'deleted' ? 'Ya, Hapus' : `Ya, Tandai ${label}`}</Button></AlertDialog.Footer>
+        </AlertDialog.Dialog>
+      </AlertDialog.Container>
+    </AlertDialog.Backdrop>;
+    return { request, dialog };
+  }
 
   const dialog = (
     <ConfirmDialog

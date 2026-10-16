@@ -69,12 +69,16 @@ class KeyRequest(BaseModel):
         return value.strip()
 
 
+class KeyUpdate(KeyRequest):
+    confirm_saved: bool = False
+
+
 @router.post('/keys', status_code=201)
 def create_key(payload: KeyRequest, request: Request):
     token = 'xm_wf_' + secrets.token_urlsafe(32)
     with connect() as conn:
         row = conn.execute('''INSERT INTO xm.integration_keys(id,company_id,created_by,name,token_hash)
-          VALUES(%s,%s,%s,%s,%s) RETURNING id,name,created_at''',
+          VALUES(%s,%s,%s,%s,%s) RETURNING id,name,created_at,saved_at''',
           (uuid.uuid4(), workspace_id(), current_user(request)['id'], payload.name, hashlib.sha256(token.encode()).hexdigest())).fetchone()
         conn.commit()
     return {**row, 'token': token, 'scope': 'property:export', 'company_id': workspace_id()}
@@ -83,9 +87,24 @@ def create_key(payload: KeyRequest, request: Request):
 @router.get('/keys')
 def list_keys():
     with connect() as conn:
-        rows = conn.execute('''SELECT id,name,created_at,last_used_at,revoked_at FROM xm.integration_keys
+        rows = conn.execute('''SELECT id,name,created_at,last_used_at,revoked_at,saved_at FROM xm.integration_keys
           WHERE company_id=%s ORDER BY created_at DESC''', (workspace_id(),)).fetchall()
     return {'keys': rows}
+
+
+@router.put('/keys/{key_id}')
+def update_key(key_id: uuid.UUID, payload: KeyUpdate):
+    """Rename or explicitly acknowledge storage without rotating or exposing the secret."""
+    with connect() as conn:
+        row = conn.execute('''UPDATE xm.integration_keys SET name=%s,
+          saved_at=CASE WHEN %s THEN coalesce(saved_at,now()) ELSE saved_at END
+          WHERE id=%s AND company_id=%s AND revoked_at IS NULL
+          RETURNING id,name,created_at,last_used_at,revoked_at,saved_at''',
+          (payload.name, payload.confirm_saved, key_id, workspace_id())).fetchone()
+        conn.commit()
+    if not row:
+        raise HTTPException(404, 'Token tidak ditemukan atau sudah dicabut.')
+    return row
 
 
 @router.delete('/keys/{key_id}')

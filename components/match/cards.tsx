@@ -40,12 +40,12 @@ export function DuplicateNote({ row }: { row: Row }) {
   return Number(row.duplicate_count) > 1 ? <span className="rounded-full bg-accent-soft px-2.5 py-1 text-sm font-medium text-accent-soft-foreground">Teks sama · {row.duplicate_count}× muncul</span> : null;
 }
 
-export function WhatsAppButton({ row, kind, label, className }: { row: Row; kind: 'buyer' | 'property'; label: string; className?: string }) {
+export function WhatsAppButton({ row, kind, label, className, branded = false }: { row: Row; kind: 'buyer' | 'property'; label: string; className?: string; branded?: boolean }) {
   const href = waLink(row.contact_phone, followUpMessage(row, kind));
   if (!href) return null;
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'secondary', size: 'md' }), 'text-success-soft-foreground', className)}>
-      <MessageCircle className="size-4" aria-hidden="true" />{label}
+    <a href={href} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: 'secondary', size: 'md' }), 'text-success-soft-foreground', branded && 'match-whatsapp-button', className)}>
+      {branded ? <span className="match-whatsapp-icon" aria-hidden="true" /> : <MessageCircle className="size-4" aria-hidden="true" />}{label}
       <span className="sr-only"> ({formatPhone(row.contact_phone)}, buka WhatsApp di tab baru)</span>
     </a>
   );
