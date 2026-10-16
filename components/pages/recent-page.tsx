@@ -15,8 +15,7 @@ import { NumberTicker } from '@/components/magicui/number-ticker';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
 import { query } from '@/lib/api';
 import { asWib, dateTime, mondayOf, number, prettyRange, shiftDay, todayWib } from '@/lib/format';
-import { useRoute, type Navigate } from '@/lib/router';
-import { RecentPreview } from '@/components/match/recent-preview';
+import type { Navigate } from '@/lib/router';
 import { useCompany } from '@/lib/session';
 import { useData, useDebounced } from '@/lib/use-data';
 import type { Direction, EntityStatus, RecentGroup, RecentResponse, Row, Temperature } from '@/lib/types';
@@ -43,12 +42,6 @@ function presets(): Preset[] {
 }
 
 export default function RecentPage({ navigate }: { navigate?: Navigate }) {
-  const { params } = useRoute();
-  const preview = process.env.NODE_ENV !== 'production' && params.get('preview') === 'lengkap';
-  return preview ? <RecentPreview>{(scenario) => <RecentWorkspace key={scenario} navigate={() => toast('Simulasi: membuka sumber di halaman Cocokkan.')} preview />}</RecentPreview> : <RecentWorkspace navigate={navigate} />;
-}
-
-function RecentWorkspace({ navigate, preview = false }: { navigate?: Navigate; preview?: boolean }) {
   const api = useApi();
   const { markSeen, company } = useCompany();
   const today = todayWib();
@@ -102,10 +95,10 @@ function RecentWorkspace({ navigate, preview = false }: { navigate?: Navigate; p
   const since = summary.data?.since;
   const marked = useRef(false);
   useEffect(() => {
-    if (preview || !summary.data || marked.current) return;
+    if (!summary.data || marked.current) return;
     const timer = window.setTimeout(() => { marked.current = true; markSeen(); }, 4000);
     return () => window.clearTimeout(timer);
-  }, [summary.data, markSeen, preview]);
+  }, [summary.data, markSeen]);
 
   const loadMarkers = useCallback((monthIso: string) => {
     void api.get<Days>(`/matches/recent/days?${query({ direction, stock_status: stockStatus, date_from: monthIso, date_to: shiftDay(monthIso, 62) })}`).then((result) => {
@@ -227,7 +220,7 @@ function RecentWorkspace({ navigate, preview = false }: { navigate?: Navigate; p
       {results?.has_more && <Button variant="secondary" size="lg" fullWidth isDisabled={data.loading} onPress={() => setMore({ key: filterKey, extra: limit - 30 + 30 })}>Tampilkan lebih banyak</Button>}
       </section>
       {active && <RecentDetailModal key={filterKey + active.source.entity_id} group={active} direction={direction} filters={{ date_from: period.from, date_to: period.to, temps: temps.join(','), stock_status: stockStatus }} onClose={() => setOpened(null)} onStatus={changeStatus} onExport={(ids) => exportResults(ids ? { recent_events: ids } : { recent_sources: [active.source.entity_id] })} onManual={navigate ? () => { setOpened(null); navigate('cocokkan', { arah: direction, id: active.source.public_id }); } : undefined} />}
-      <ExportAllModal state={exportState} direction={exportDirection} filters={exportFilters} preview={preview} />
+      <ExportAllModal state={exportState} direction={exportDirection} filters={exportFilters} />
       {statusDialog}
     </div>
   );

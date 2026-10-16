@@ -5,6 +5,10 @@ import './globals.css';
 export const metadata: Metadata = {
   title: 'Property Auto Audit · Property Matchmaker',
   description: 'Audit percakapan WhatsApp dan pencocokan otomatis buyer dengan listing property.',
+  icons: {
+    icon: { url: '/property-autoaudit-icon.png', type: 'image/png' },
+    apple: '/property-autoaudit-icon.png',
+  },
 };
 
 export const viewport: Viewport = {

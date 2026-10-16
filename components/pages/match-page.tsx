@@ -1,12 +1,14 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Accordion, Button, Chip, Label, SearchField, Switch, ToggleButton, ToggleButtonGroup, toast, useOverlayState } from '@heroui/react';
-import { ArrowLeft, Building2, Download, FileText, ListChecks, ListFilter, SlidersHorizontal, Trash2, UsersRound, X } from 'lucide-react';
-import { EmptyState, ErrorNotice, LoadingRows, PageHeader, Panel, Segmented } from '@/components/app/primitives';
-import { PeriodPicker, type Period, type Preset } from '@/components/app/period-picker';
+import { Accordion, Button, Chip, Dropdown, Label, SearchField, Switch, toast, useOverlayState } from '@heroui/react';
+import { Header } from 'react-aria-components';
+import { ArrowLeft, Check, ChevronDown, Download, FileText, ListChecks, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { EmptyState, ErrorNotice, LoadingRows, Segmented } from '@/components/app/primitives';
+import { RangeButton, type Period, type Preset } from '@/components/app/period-picker';
 import { useStatusActions } from '@/components/app/status-menu';
-import { RecommendationCard, SourceCard } from '@/components/match/cards';
+import { RecentSourceCard } from '@/components/match/recent-source-card';
+import { DetailResultCard } from '@/components/match/recent-detail-modal';
 import { ExportAllModal } from '@/components/match/export-all-modal';
 import { errorMessage, isAbort, query } from '@/lib/api';
 import { STATUS_LABELS, cleanName, formatPhone, monthEnd, monthStart, mondayOf, number, shiftDay, shiftMonth, structuredSummary, todayWib } from '@/lib/format';
@@ -118,76 +120,28 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   }, [hasCompany, loadMarkers]);
 
   const sourceLabel = direction === 'buyer' ? 'buyer' : 'listing';
-  const targetLabel = direction === 'buyer' ? 'listing' : 'buyer';
-  const filtersActive = (filters.stock.length !== 1 || filters.stock[0] !== 'ready' ? 1 : 0) + (filters.publicId ? 1 : 0) + (filters.phones ? 1 : 0);
 
   return (
-    <div className="space-y-5">
-      <PageHeader title="Cocokkan" description={`Pilih ${sourceLabel} milik perusahaan di daftar, lalu lihat ${targetLabel} yang paling cocok.`} />
-
-      <fieldset aria-label="Arah pencocokan" className="m-0 grid min-w-0 gap-3 border-0 p-0 sm:grid-cols-2">
-        {([['buyer', 'Buyer → Listing', 'Cari listing untuk buyer milik perusahaan.', UsersRound], ['property', 'Listing → Buyer', 'Temukan buyer untuk listing milik perusahaan.', Building2]] as const).map(([id, title, text, Icon]) => (
-          <button key={id} type="button" aria-pressed={direction === id} onClick={() => changeDirection(id)}
-            className={cn('flex items-start gap-3.5 rounded-2xl border p-4 text-left transition', direction === id ? 'border-accent bg-accent-soft/60 ring-2 ring-accent/25' : 'border-border bg-surface hover:border-accent/50')}>
-            <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-2xl', direction === id ? 'bg-accent text-accent-foreground' : 'bg-default text-muted')}><Icon className="size-5" aria-hidden="true" /></span>
-            <span><span className="block text-lg font-bold">{title}</span><span className="mt-0.5 block text-base leading-snug text-muted">{text}</span></span>
-          </button>
-        ))}
+    <div className="general-settings match-page space-y-5">
+      <fieldset className="match-direction-pills" aria-label="Arah pencocokan">
+        <button type="button" aria-pressed={direction === 'buyer'} onClick={() => changeDirection('buyer')}>Buyer → Listing</button>
+        <button type="button" aria-pressed={direction === 'property'} onClick={() => changeDirection('property')}>Listing → Buyer</button>
       </fieldset>
-
-      <Panel bodyClassName="space-y-4" className={cn(mobileDetail && 'hidden xl:block')}>
-        <div className="space-y-4">
-          <p className="flex items-center gap-2 text-base font-bold"><ListFilter className="size-5 text-accent" aria-hidden="true" />Periode pencocokan</p>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onPress={() => update({ buyerPeriod: { preset: 'today', from: todayWib(), to: todayWib() }, listingPeriod: { preset: 'last_3_months', from: shiftMonth(todayWib(), -3), to: todayWib() } })}>Buyer hari ini × stok 3 bulan</Button>
-            <Button variant="secondary" onPress={() => update({ buyerPeriod: { preset: 'last_1_month', from: shiftMonth(todayWib(), -1), to: todayWib() }, listingPeriod: { preset: 'today', from: todayWib(), to: todayWib() } })}>Listing hari ini × buyer 1 bulan</Button>
-          </div>
-          {([{ kind: 'buyer', key: 'buyerPeriod', label: 'Tanggal posting buyer' }, { kind: 'property', key: 'listingPeriod', label: 'Tanggal posting listing' }] as const).map(({ kind, key, label }) => (
-            <div key={key} className="space-y-2">
-              <p className="text-base font-semibold">{label}</p>
-              <PeriodPicker label={label} value={filters[key]} onChange={(period) => update({ [key]: period })} presets={presets()} max={todayWib()} markers={markers[kind]} onMonthChange={(month) => loadMarkers(kind, month)} />
-            </div>
-          ))}
-          <p className="text-sm text-muted">Periode buyer dan listing berlaku pada kedua arah pencocokan, termasuk hasil dan PDF. “Bulan lalu” adalah bulan kalender sebelumnya; “1 bulan terakhir” dihitung mundur dari hari ini.</p>
+      <section className={cn('match-filter-panel', mobileDetail && 'hidden xl:block')} aria-label="Filter pencocokan">
+        <div className="match-filter-row">
+          <div className="team-search"><Search className="size-4" aria-hidden="true" /><input type="search" aria-label="Cari ID buyer atau listing" placeholder="Cari ID buyer atau listing..." value={filters.publicId} onChange={(event) => update({ publicId: event.target.value })} />{filters.publicId && <button type="button" aria-label="Hapus pencarian ID" onClick={() => update({ publicId: '' })}><X className="size-4" /></button>}</div>
+          <MatchPeriodSelect label="Buyer" value={filters.buyerPeriod} onChange={(value) => update({ buyerPeriod: value })} markers={markers.buyer} onMonthChange={(month) => loadMarkers('buyer', month)} />
+          <MatchPeriodSelect label="Listing" value={filters.listingPeriod} onChange={(value) => update({ listingPeriod: value })} markers={markers.property} onMonthChange={(month) => loadMarkers('property', month)} />
+          <Dropdown><Dropdown.Trigger className="upload-history-sort"><span>Tampilkan</span><ChevronDown className="size-4" /></Dropdown.Trigger><Dropdown.Popover placement="bottom end" className="upload-history-sort-menu recent-display-menu"><Dropdown.Menu aria-label="Jenis hasil dan status data" selectionMode="multiple" selectedKeys={new Set([...filters.temps, ...filters.stock])} onSelectionChange={(keys) => {
+            const values = keys === 'all' ? [...TEMPS.map((item) => item.id), ...STOCK.map((item) => item.id)] : [...keys];
+            const stock = STOCK.filter((item) => values.includes(item.id)).map((item) => item.id);
+            update({ temps: TEMPS.filter((item) => values.includes(item.id)).map((item) => item.id), stock: stock.length ? stock : ['ready'] });
+          }}><Dropdown.Section>{TEMPS.map((item) => <Dropdown.Item key={item.id} id={item.id} textValue={item.label} shouldCloseOnSelect={false}><span className={filters.temps.includes(item.id) ? 'recent-filter-checkbox is-checked' : 'recent-filter-checkbox'} aria-hidden="true">{filters.temps.includes(item.id) && <Check className="size-3" />}</span><Label>{item.label}</Label></Dropdown.Item>)}</Dropdown.Section><Dropdown.Section><Header className="recent-filter-section-heading">Status</Header>{STOCK.map((item) => <Dropdown.Item key={item.id} id={item.id} textValue={item.label} shouldCloseOnSelect={false}><span className={filters.stock.includes(item.id) ? 'recent-filter-checkbox is-checked' : 'recent-filter-checkbox'} aria-hidden="true">{filters.stock.includes(item.id) && <Check className="size-3" />}</span><Label>{item.label}</Label></Dropdown.Item>)}</Dropdown.Section></Dropdown.Menu></Dropdown.Popover></Dropdown>
+          {direction === 'property' && <div className="team-search match-phone-search"><Search className="size-4" aria-hidden="true" /><input type="text" inputMode="tel" aria-label="Nomor sales" placeholder="Nomor sales..." value={filters.phones} onChange={(event) => update({ phones: event.target.value })} /></div>}
+          <Dropdown><Dropdown.Trigger className="upload-history-sort"><SlidersHorizontal className="match-period-shortcut-icon size-4" /><span>Periode cepat</span><ChevronDown className="size-4" /></Dropdown.Trigger><Dropdown.Popover placement="bottom end" className="upload-history-sort-menu"><Dropdown.Menu aria-label="Periode pencocokan cepat" onAction={(key) => update(key === 'buyer-today' ? { buyerPeriod: { preset: 'today', from: todayWib(), to: todayWib() }, listingPeriod: { preset: 'last_3_months', from: shiftMonth(todayWib(), -3), to: todayWib() } } : { buyerPeriod: { preset: 'last_1_month', from: shiftMonth(todayWib(), -1), to: todayWib() }, listingPeriod: { preset: 'today', from: todayWib(), to: todayWib() } })}><Dropdown.Item id="buyer-today" textValue="Buyer hari ini × stok 3 bulan"><Label>Buyer hari ini × stok 3 bulan</Label></Dropdown.Item><Dropdown.Item id="listing-today" textValue="Listing hari ini × buyer 1 bulan"><Label>Listing hari ini × buyer 1 bulan</Label></Dropdown.Item></Dropdown.Menu></Dropdown.Popover></Dropdown>
         </div>
-        <div>
-          <p className="mb-2 text-base font-bold">Tampilkan hasil</p>
-          <ToggleButtonGroup aria-label="Jenis hasil" selectionMode="multiple" isDetached selectedKeys={new Set(filters.temps)} className="max-w-full flex-wrap gap-2"
-            onSelectionChange={(keys) => update({ temps: [...keys] as MatchFilter[] })}>
-            {TEMPS.map((item) => <ToggleButton key={item.id} id={item.id} className="min-h-11 px-4 text-[0.95rem] font-semibold">{item.label}</ToggleButton>)}
-          </ToggleButtonGroup>
-        </div>
-        <details className="group rounded-2xl border border-border bg-background" open={filtersActive > 0}>
-          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-2 px-4 text-base font-semibold">
-            <span className="flex items-center gap-2"><SlidersHorizontal className="size-5 text-accent" aria-hidden="true" />Filter lainnya{filtersActive > 0 && <Chip color="accent" variant="soft" size="sm">{filtersActive} aktif</Chip>}</span>
-            <span className="text-sm text-muted group-open:hidden">Buka</span><span className="hidden text-sm text-muted group-open:inline">Tutup</span>
-          </summary>
-          <div className="space-y-4 border-t border-border p-4">
-            <div>
-              <p className="mb-2 text-base font-bold">Status {sourceLabel} / {targetLabel}</p>
-              <ToggleButtonGroup aria-label="Status stok" selectionMode="multiple" isDetached selectedKeys={new Set(filters.stock)} className="max-w-full flex-wrap gap-2"
-                onSelectionChange={(keys) => update({ stock: ([...keys] as EntityStatus[]).length ? [...keys] as EntityStatus[] : ['ready'] })}>
-                {STOCK.map((item) => <ToggleButton key={item.id} id={item.id} className="min-h-11 px-4 text-[0.95rem] font-semibold">{item.label}</ToggleButton>)}
-              </ToggleButtonGroup>
-              <p className="mt-1.5 text-sm text-muted">Standarnya hanya yang Ready. Pilih Sold, On-hold, atau Dihapus untuk melihat atau mengembalikan data itu.</p>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <SearchField value={filters.publicId} onChange={(value) => update({ publicId: value })} aria-label="Cari berdasarkan ID" name="id">
-                <Label className="text-base font-bold">Cari ID</Label>
-                <SearchField.Group><SearchField.SearchIcon /><SearchField.Input className="h-12 text-base" placeholder="mis. AB908 atau L-AB908" /><SearchField.ClearButton /></SearchField.Group>
-              </SearchField>
-              {direction === 'property' && (
-                <SearchField value={filters.phones} onChange={(value) => update({ phones: value })} aria-label="Filter nomor sales" name="phones">
-                  <Label className="text-base font-bold">Nomor sales</Label>
-                  <SearchField.Group><SearchField.SearchIcon /><SearchField.Input className="h-12 text-base" placeholder="Pisahkan beberapa nomor dengan koma" inputMode="tel" /><SearchField.ClearButton /></SearchField.Group>
-                </SearchField>
-              )}
-            </div>
-            <p className="text-sm text-muted">Filter ID dan nomor sales hanya mempersempit daftar sumber yang sudah sesuai aturan perusahaan.</p>
-          </div>
-        </details>
         <p className="text-sm leading-relaxed text-muted">{salesMode ? <>Sumber {sourceLabel} wajib memiliki nomor kontak dalam watchlist perusahaan: <strong className="text-foreground">{company?.tracked_phones.join(' · ') || 'belum ada nomor'}</strong>.</> : company?.search_terms.length ? <>Sumber {sourceLabel} wajib memuat keyword perusahaan: <strong className="text-foreground">{company.search_terms.join(' · ')}</strong>.</> : <>Menampilkan sumber {sourceLabel} dari data perusahaan ini. Keyword perusahaan belum diatur.</>} Aturan ini berlaku pada daftar, hasil, dan export.{company?.permissions.manage_settings ? <> Kelola aturan di <button type="button" className="font-semibold text-accent underline" onClick={() => navigate?.('pengaturan')}>Pengaturan</button>.</> : <> Aturan dikelola oleh super admin perusahaan.</>}</p>
-      </Panel>
+      </section>
 
       {/* Remounting on every new list resets the selection, paging and open groups without any syncing effects. */}
       <MatchWorkspace
@@ -224,7 +178,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
   const exportAll = useOverlayState();
 
   const bump = useCallback(() => setTick((value) => value + 1), []);
-  const { request: requestStatus, dialog: statusDialog } = useStatusActions(bump);
+  const { request: requestStatus, dialog: statusDialog } = useStatusActions(bump, true);
 
   const flat = useData((signal) => api.get<RowsResponse>(`/workspace?${query({ ...base, offset })}`, signal), [base, offset, tick], enabled && !useGroups);
   const groups = useData((signal) => api.get<{ groups: RowGroupSummary[]; has_more: boolean }>(`/workspace/groups?${query({ ...base, group_by: groupBy, group_search: groupSearch })}`, signal),
@@ -305,14 +259,14 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
       setBulk(all);
     } catch (reason) { toast.danger(errorMessage(reason, 'Belum dapat memilih semua. Coba lagi.')); } finally { setSelectingAll(false); }
   }
-  const card = (row: Row, withSender = true) => (
-    <SourceCard key={row.id} row={row} direction={direction} selected={active?.id === row.id} showSender={withSender}
+  const card = (row: Row) => (
+    <RecentSourceCard key={row.id} row={row} direction={direction} foundAt={row.last_seen_at || row.sent_at || ''} isNew={false} showSeenBadge={false} selected={active?.id === row.id}
       onSelect={() => select(row)} onStatus={(status) => changeSource(row, status)} bulk={bulkProps(row)} />
   );
 
   return (
     <>
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(380px,42%)_1fr]">
+      <div className="match-workspace-grid grid items-start gap-5 xl:grid-cols-[minmax(380px,42%)_1fr]">
         {/* ------------------------------------------------------------ list */}
         <section aria-label={`Daftar ${sourceLabel}`} aria-busy={useGroups ? groups.loading : flat.loading} className={cn('min-w-0 space-y-3', mobileDetail && 'hidden xl:block')}>
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -356,7 +310,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
                       </Accordion.Heading>
                       <Accordion.Panel>
                         <Accordion.Body>
-                          {expanded.has(item.key || '__none') && <GroupRows key={tick} base={base} groupBy={groupBy} groupKey={item.key} render={(row) => card(row, false)} />}
+                          {expanded.has(item.key || '__none') && <GroupRows key={tick} base={base} groupBy={groupBy} groupKey={item.key} render={(row) => card(row)} />}
                         </Accordion.Body>
                       </Accordion.Panel>
                     </Accordion.Item>
@@ -420,7 +374,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
                   {unmatched && !temps.includes('unmatched') && <EmptyState compact animation="empty-box" title={`Belum ada ${targetLabel} yang cocok`} description="Aktifkan “Belum cocok” di filter untuk memasukkannya ke PDF." />}
                   {!unmatched && visible.length === 0 && <EmptyState compact animation="empty-box" title="Tidak ada hasil untuk jenis yang dipilih" description="Aktifkan Hot dan Warm di filter untuk melihat semua kecocokan." />}
                   {visible.map((target) => (
-                    <RecommendationCard key={target.id} target={target} source={group.source} direction={direction}
+                    <DetailResultCard key={target.id} match={{ target, score: Number(target.score), found_at: target.last_seen_at || target.sent_at || '', event_id: 0, temperature: Number(target.score) >= 80 ? 'hot' : 'warm', import_id: null, agent_name: null, upgraded_to_hot: false }} source={group.source} direction={direction}
                       checked={exports.includes(keyFor(target))} onCheck={() => setExports((current) => toggle(current, keyFor(target)))}
                       onStatus={(status) => changeTarget(target, status)} />
                   ))}
@@ -438,13 +392,11 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
       </div>
 
       {bulkMode && (
-        <div className="pb-safe fixed inset-x-3 bottom-20 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 rounded-3xl border border-border bg-surface p-3 shadow-2xl lg:inset-x-auto lg:bottom-6 lg:left-[calc(var(--app-sidebar-width)+var(--app-gutter)+var(--app-content-inset))] lg:right-[calc(var(--app-gutter)+var(--app-content-inset))]">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="px-2 text-base font-bold">{number(bulkRows.length)} dipilih</span>
-            <Button variant="secondary" isPending={selectingAll} onPress={selectAll}><ListChecks className="size-4" aria-hidden="true" />Pilih semua</Button>
-            <Button variant="tertiary" isDisabled={!bulkRows.length || selectingAll} onPress={() => setBulk({})}>Batal pilih semua</Button>
-          </div>
-          <div className="flex flex-wrap gap-2">
+        <div className="match-bulk-menu pb-safe fixed inset-x-3 bottom-20 z-40 mx-auto lg:inset-x-auto lg:bottom-6 lg:left-[calc(var(--app-sidebar-width)+var(--app-gutter)+var(--app-content-inset))] lg:right-[calc(var(--app-gutter)+var(--app-content-inset))]">
+          <span className="match-bulk-count">{number(bulkRows.length)} kartu dipilih</span>
+          <div className="match-bulk-actions">
+            <button type="button" className="recent-selection-link" disabled={selectingAll} onClick={() => void selectAll()}>{selectingAll ? 'Sedang memilih...' : 'Pilih semua'}</button>
+            <button type="button" className="recent-selection-link" disabled={!bulkRows.length || selectingAll} onClick={() => setBulk({})}>Batal pilih semua</button>
             {(['ready', 'on_hold', 'sold'] as const).map((status) => <Button key={status} variant="secondary" isDisabled={!bulkRows.length} onPress={() => applyBulk(status)}>{STATUS_LABELS[status]}</Button>)}
             <Button variant="danger-soft" isDisabled={!bulkRows.length} onPress={() => applyBulk('deleted')}><Trash2 className="size-4" aria-hidden="true" />Hapus</Button>
             <Button isIconOnly variant="tertiary" aria-label="Batalkan pilihan" onPress={() => { setBulk({}); setBulkMode(false); }}><X className="size-5" /></Button>
@@ -455,6 +407,15 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
       <ExportAllModal state={exportAll} direction={direction} filters={base} />
     </>
   );
+}
+
+function MatchPeriodSelect({ label, value, onChange, markers, onMonthChange }: { label: string; value: Period; onChange: (value: Period) => void; markers: Record<string, number>; onMonthChange: (month: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return <div className="recent-date-controls"><div className="recent-filter-select"><select aria-label={`Tanggal posting ${label}`} value={value.preset} onChange={(event) => {
+    if (event.target.value === 'custom') { onChange({ ...value, preset: 'custom' }); setOpen(true); return; }
+    const preset = presets().find((item) => item.id === event.target.value);
+    if (preset) { onChange({ preset: preset.id, ...preset.range() }); setOpen(false); }
+  }}>{presets().map((preset) => <option key={preset.id} value={preset.id}>{label}: {preset.label}</option>)}<option value="custom">{label}: Pilih tanggal tertentu</option></select><ChevronDown className="size-4" aria-hidden="true" /></div>{value.preset === 'custom' && <RangeButton value={value} active={!!value.from} max={todayWib()} markers={markers} onMonthChange={onMonthChange} isOpen={open} onOpenChange={setOpen} onChange={(range) => onChange({ preset: 'custom', ...range })} iconOnly highlightToday={false} helpText={`Angka hijau di kalender = jumlah posting ${label.toLowerCase()} pada hari itu.`} />}</div>;
 }
 
 function groupTitle(item: RowGroupSummary, by: GroupBy) {

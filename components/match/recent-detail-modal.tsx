@@ -48,6 +48,7 @@ export function RecentDetailModal({ group, direction, filters, onClose, onStatus
           <Modal.Header><Modal.Heading>Detail match terbaru</Modal.Heading><p className="mt-1 text-sm text-muted">{sourceLabel} {source.public_id} · {number(count)} pasangan pada tanggal yang dipilih</p></Modal.Header>
           <Modal.Body className="sales-dialog-body recent-detail-body">
             <div className="recent-detail-layout">
+              <div className="recent-detail-source-scroll">
               <section aria-label="Informasi sumber" className="recent-detail-source">
                 <Avatar color="accent" className="recent-card-avatar"><Avatar.Fallback>{initials(cleanName(source.contact_name) || sourceLabel)}</Avatar.Fallback></Avatar>
                 <p className="recent-detail-source-name">{cleanName(source.contact_name) || `${sourceLabel} tanpa nama`}</p>
@@ -63,6 +64,7 @@ export function RecentDetailModal({ group, direction, filters, onClose, onStatus
                 <OriginalMessage row={source} />
                 <div className="recent-source-actions"><WhatsAppButton row={source} kind={direction} label={`WhatsApp ${direction === 'buyer' ? 'buyer' : 'pemilik listing'}`} branded /><StatusMenu status={source.entity_status} name={`${sourceLabel} ${source.public_id}`} onChoose={(status) => onStatus(source, status)} textTrigger /></div>
               </section>
+              </div>
               <section aria-label="Hasil pencocokan" className="recent-detail-results min-w-0 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-bold">{number(count)} Hasil {targetLabel === 'listing' ? 'Listing' : 'Buyer'}</h3><Button variant="secondary" isDisabled={!picked.length || data.loading} onPress={() => onExport()}>Export seluruh hasil PDF</Button></div>
                 <ErrorNotice message={data.error} onRetry={data.reload} />
@@ -93,7 +95,7 @@ function OriginalMessage({ row }: { row: Row }) {
   return <details className="recent-inline-original"><summary>Baca pesan asli<ChevronDown className="size-4" aria-hidden="true" /></summary><div className="recent-wa-message"><span className="recent-wa-avatar">{initials(sender)}</span><div className="recent-wa-bubble"><p className="recent-wa-sender">{sender}</p><p className="recent-wa-text">{row.raw_text || row.normalized_text || 'Pesan asli belum tersedia.'}</p><time className="recent-wa-time" title={dateTime(row.sent_at)}>{sent ? new Intl.DateTimeFormat('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(sent).replace('.', ':') : 'Waktu kirim tidak tersedia'}</time></div></div></details>;
 }
 
-function DetailResultCard({ match, source, direction, checked, onCheck, onStatus }: {
+export function DetailResultCard({ match, source, direction, checked, onCheck, onStatus }: {
   match: RecentMatch; source: Row; direction: Direction; checked: boolean; onCheck: () => void; onStatus: (status: EntityStatus) => void;
 }) {
   const [allReasons, setAllReasons] = useState(false);

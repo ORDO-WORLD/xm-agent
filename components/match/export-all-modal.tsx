@@ -40,18 +40,18 @@ function duration(seconds: number) {
 }
 
 /** Confirm output format, then export with real progress per sales. */
-export function ExportAllModal({ state, direction, filters, preview = false }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, unknown>; preview?: boolean }) {
+export function ExportAllModal({ state, direction, filters }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, unknown> }) {
   const [locked, setLocked] = useState(false);
   return (
     <Modal.Backdrop isOpen={state.isOpen} isDismissable={!locked} isKeyboardDismissDisabled={locked} onOpenChange={(open) => { if (open || !locked) state.setOpen(open); }}>
       <Modal.Container size="lg" scroll="inside">
-        <Modal.Dialog>{state.isOpen ? <Body direction={direction} filters={filters} preview={preview} onLock={setLocked} onClose={() => { setLocked(false); state.close(); }} /> : null}</Modal.Dialog>
+        <Modal.Dialog>{state.isOpen ? <Body direction={direction} filters={filters} onLock={setLocked} onClose={() => { setLocked(false); state.close(); }} /> : null}</Modal.Dialog>
       </Modal.Container>
     </Modal.Backdrop>
   );
 }
 
-function Body({ direction, filters, onLock, onClose, preview }: { direction: Direction; filters: Record<string, unknown>; onLock: (locked: boolean) => void; onClose: () => void; preview: boolean }) {
+function Body({ direction, filters, onLock, onClose }: { direction: Direction; filters: Record<string, unknown>; onLock: (locked: boolean) => void; onClose: () => void }) {
   const api = useApi();
   const plan = useData((signal) => api.post<Plan>('/export/all/plan', filters, signal), []);
   const [output, setOutput] = useState<'single' | 'grouped'>('grouped');
@@ -90,7 +90,6 @@ function Body({ direction, filters, onLock, onClose, preview }: { direction: Dir
   const phrase = stage === 'merging' ? (output === 'grouped' ? 'Menyiapkan PDF terpisah dalam ZIP…' : 'Menggabungkan semua bagian menjadi satu PDF…') : lines[Math.floor(elapsed / PHRASE_SECONDS) % lines.length];
 
   function save(url: string) {
-    if (preview) { toast('Simulasi export selesai. Tidak ada file yang diunduh.'); return; }
     const link = document.createElement('a');
     link.href = url; link.download = fileName; link.click();
   }
@@ -120,7 +119,7 @@ function Body({ direction, filters, onLock, onClose, preview }: { direction: Dir
       const url = URL.createObjectURL(blob);
       setFile(url); save(url);
       setStage('done');
-      toast.success(preview ? 'Simulasi export selesai' : output === 'grouped' ? 'PDF per kelompok siap diunduh dalam ZIP' : 'PDF semua pencocokan siap diunduh');
+      toast.success(output === 'grouped' ? 'PDF per kelompok siap diunduh dalam ZIP' : 'PDF semua pencocokan siap diunduh');
     } catch (reason) {
       if (cancelled.current) return;
       setProblem(errorMessage(reason, 'Export belum dapat diselesaikan.'));
@@ -202,7 +201,7 @@ function Body({ direction, filters, onLock, onClose, preview }: { direction: Dir
           <div className="flex flex-col items-center gap-2 py-4 text-center">
             <CircleCheck className="size-14 text-success" aria-hidden="true" />
             <p className="text-lg font-bold">{number(totalPages)} halaman untuk {data.groups.length} {unit}</p>
-            <p className="text-base text-muted">{preview ? <>Simulasi <strong>{fileName}</strong> selesai. Tidak ada file yang diunduh.</> : <>File <strong>{fileName}</strong> sudah diunduh. Kalau belum muncul, tekan Unduh lagi.</>}</p>
+            <p className="text-base text-muted">File <strong>{fileName}</strong> sudah diunduh. Kalau belum muncul, tekan Unduh lagi.</p>
           </div>
         )}
       </Modal.Body>
