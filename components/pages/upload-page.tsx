@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type R
 import { Button, Dropdown, Input, Label, Tabs, TextField } from '@heroui/react';
 import { ArrowDownUp, ArrowRight, CalendarDays, CheckCircle2, ChevronDown, FileJson, History, Info, LoaderCircle, MessageSquareText, RefreshCw, Search, Sparkles, Trash2, TriangleAlert, UploadCloud, UserRound, Workflow, X } from 'lucide-react';
 import { EmptyState, ErrorNotice, Notice } from '@/components/app/primitives';
-import { AutoAuditCard } from '@/components/pages/autoaudit-card';
+import { PropertySources } from '@/components/app/autoaudit-settings-link';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
 import { Confetti, type ConfettiRef } from '@/components/magicui/confetti';
 import { errorMessage } from '@/lib/api';
@@ -352,7 +352,7 @@ export default function UploadPage({ navigate }: { navigate?: Navigate }) {
       {running.map((item) => <UploadProcessing key={item.id} item={item} />)}
 
         </Tabs.Panel>
-        <Tabs.Panel id="autoaudit"><AutoAuditCard onImported={reload} /></Tabs.Panel>
+        <Tabs.Panel id="autoaudit"><PropertySources /></Tabs.Panel>
       </Tabs>
     </div>
   );

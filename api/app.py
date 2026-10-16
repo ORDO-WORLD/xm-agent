@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from db import connect, ensure_schema
@@ -44,7 +45,6 @@ class BuyerBatchRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_schema()
-    seed_admin()
     migrate_v4()
     try:
         ensure_collection()
@@ -66,6 +66,26 @@ app.add_middleware(
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path.rstrip('/') or '/'
+    from property_control import resolve as control_identity, needs_control
+    control = bool(request.headers.get('x-autoaudit-property-control'))
+    # Local account/Company CRUD has no place in the AutoAudit-owned account directory.
+    if path == '/auth/password' or path.startswith('/team') or (path.startswith('/admin/companies') and request.method != 'GET') or path.startswith('/admin/autoaudit'):
+        return JSONResponse({'detail': 'Akun dan Company dikelola melalui AutoAudit.'}, status_code=403)
+    if needs_control(request.method, path) and not control:
+        return JSONResponse({'detail': 'Pengaturan hanya dapat diubah melalui AutoAudit.'}, status_code=403)
+    if control:
+        try:
+            user, workspace = await control_identity(request)
+        except SsoUnavailable:
+            return JSONResponse({'detail': 'Validasi AutoAudit belum tersedia.'}, status_code=503)
+        except HTTPException as exc:
+            return JSONResponse({'detail': exc.detail}, status_code=exc.status_code)
+        if not role_allows(user['role'], required_role(request.method, path)):
+            return JSONResponse({'detail': 'Hak akses tidak mencukupi.'}, status_code=403)
+        with workspace_scope(workspace, user['id']), actor_scope(user, user['role'] == 'admin'), activity.control_scope(request.state.property_control):
+            response = await call_next(request)
+            response.headers['Cache-Control'] = 'private, no-store'
+            return response
     if is_export_path(path):
         try:
             key = integration_authenticate(request)
@@ -79,7 +99,7 @@ async def require_login(request: Request, call_next):
             return response
     if not is_public(path):
         try:
-            user = current_user(request)
+            user = await run_in_threadpool(current_user, request)
         except SsoUnavailable:
             # Fail closed, but keep the session: AutoAudit being down is not a sign-out.
             return JSONResponse({'detail': 'AutoAudit belum dapat dihubungi. Coba lagi sebentar.'}, status_code=503)
@@ -121,6 +141,8 @@ async def require_login(request: Request, call_next):
 
 app.include_router(auth_router)
 app.include_router(integration_router)
+from property_control import router as property_control_router
+app.include_router(property_control_router)
 
 
 @app.get("/health")

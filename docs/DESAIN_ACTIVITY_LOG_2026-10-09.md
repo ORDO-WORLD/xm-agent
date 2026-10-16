@@ -2,6 +2,17 @@
 
 Tanggal: 9 Oktober 2026. Status: **disetujui dan diimplementasikan secara lokal** (9 Oktober 2026). Belum ada perubahan produksi.
 
+Pembaruan source 16 Oktober 2026: perubahan pengaturan melalui AA menambahkan
+outbox pada `xm.activity_log` (`autoaudit_event_id`, `autoaudit_delivery_state`),
+atomik dengan perubahan data. Worker mengirim maksimal 50 event/60 detik dengan
+budget jaringan sekitar lima detik, tanpa connection DB terbuka saat HTTP.
+Receipt UUID + PR0001 pada AA mencegah duplicate setelah retry. Log pengaturan
+dan receipt disimpan tanpa batas umur sesuai pilihan pengguna; view tetap 90
+hari. Relay hanya field names/ID, tidak membawa raw key/tiket/nilai setting.
+Superadmin/Login As tidak menjadi company activity AA. Kontrak aktif:
+[Property](../../sales-audit-2/agent-docs/domains/property/README.md).
+Gagal login password lokal bukan lagi jalur aktif; login hanya AA.
+
 ## 1. Tujuan
 
 Administrator platform dapat membaca, dalam kalimat biasa, siapa melakukan apa di semua company: perubahan data, urusan akun, unduhan, dan apa saja yang dilihat orang.

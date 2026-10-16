@@ -11,7 +11,7 @@ from reindex import glossary_values
 from auth import current_user
 from company import company_row, effective_terms, personal_terms
 from entities import STATUSES
-from tenant import owner_id, workspace_id
+from tenant import workspace_id
 from search_terms import normalize_terms, search_filter
 from periods import MatchingPeriods, date_filter, matching_windows
 from matching_scope import document_scope_filter, queue_scope_recompute
@@ -103,7 +103,7 @@ def get_preferences(request: Request):
     with connect() as conn:
         row = conn.execute(
             'SELECT preferences FROM xm.user_preferences WHERE user_id=%s',
-            (owner_id() or user['id'],),
+            (user['id'],),
         ).fetchone()
     return {**Preferences().model_dump(), **(row['preferences'] if row else {})}
 
@@ -112,11 +112,15 @@ def get_preferences(request: Request):
 def save_preferences(payload: Preferences, request: Request):
     user = current_user(request)
     with connect() as conn:
+        previous = conn.execute('SELECT preferences FROM xm.user_preferences WHERE user_id=%s', (user['id'],)).fetchone()
+        changed = {key: value for key, value in payload.model_dump().items() if (previous or {}).get('preferences', {}).get(key) != value}
         conn.execute(
             '''INSERT INTO xm.user_preferences(user_id, preferences) VALUES(%s,%s::jsonb)
                ON CONFLICT(user_id) DO UPDATE SET preferences=xm.user_preferences.preferences || excluded.preferences, updated_at=now()''',
-            (owner_id() or user['id'], json.dumps(payload.model_dump())),
+            (user['id'], json.dumps(payload.model_dump())),
         )
+        if changed:
+            activity.record(conn, 'change', 'preferences.save', 'mengubah preferensi pribadi', {key: True for key in changed})
         conn.commit()
     return payload
 
@@ -158,7 +162,7 @@ def get_search_default(request: Request = None):
         # The first thing the Pengaturan page loads.
         activity.record_view('page.open', 'membuka Pengaturan')
     with connect() as conn:
-        return search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
+        return search_state(conn, user['role'] if user else 'admin', user['id'] if user else None)
 
 
 @router.put('/search-default')
@@ -184,7 +188,7 @@ def save_search_default(payload: SearchDefault, request: Request = None):
         if parts:
             activity.record(conn, 'change', 'search.company', 'kata kunci company: ' + ', '.join(parts), details)
         conn.commit()
-        state = search_state(conn, user['role'] if user else 'admin', (owner_id() or user['id']) if user else None)
+        state = search_state(conn, user['role'] if user else 'admin', user['id'] if user else None)
     invalidate_stats(workspace_id())
     return state
 
@@ -205,7 +209,7 @@ def save_personal_search(payload: PersonalSearch, request: Request):
     with connect() as conn:
         if company_row(conn)['search_locked']:
             raise HTTPException(403, 'Kata kunci dikunci oleh super admin company.')
-        key = owner_id() or user['id']
+        key = user['id']
         parts, details = _term_changes(personal_terms(conn, key) or [], terms)
         conn.execute(
             '''INSERT INTO xm.user_preferences(user_id, preferences) VALUES(%s,%s::jsonb)
@@ -220,7 +224,7 @@ def save_personal_search(payload: PersonalSearch, request: Request):
 @router.delete('/search-default/personal')
 def reset_personal_search(request: Request):
     user = current_user(request)
-    key = owner_id() or user['id']
+    key = user['id']
     with connect() as conn:
         had = personal_terms(conn, key)
         conn.execute("UPDATE xm.user_preferences SET preferences=preferences - 'search_terms', updated_at=now() WHERE user_id=%s", (key,))

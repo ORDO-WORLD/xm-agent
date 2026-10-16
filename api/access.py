@@ -7,7 +7,7 @@ Roles
 """
 
 ROLE_RANK = {'user': 1, 'company_admin': 2, 'admin': 3}
-PUBLIC_PATHS = {'/health', '/auth/login'}
+PUBLIC_PATHS = {'/health', '/auth/login', '/auth/logout'}
 # Inbound webhooks carry their own secret in the path; they have no session.
 # The AutoAudit sign-in routes are what create a session.
 PUBLIC_PREFIXES = ('/hooks/', '/auth/sso/')

@@ -19,7 +19,7 @@ Panduan lengkap, tabel peran, dan langkah upgrade: [docs/UPGRADE_V4.0.md](docs/U
 - PostgreSQL schema: `xm`
 - Qdrant collection: `xm_rag`
 - Local runtime data: `data/`
-- Every account owns a private workspace. PostgreSQL records and Qdrant payloads use the workspace namespace in `company_id`; the legacy admin archive keeps `xm`, and new users receive a separate `xm-user-<uuid>` namespace. Every import also carries an `agent_name`.
+- Company dan Team Access berbagi workspace Company, dengan UUID/preferensi pribadi terpisah. Mapping `xm.app_preferences.autoaudit_company_id` mempertahankan namespace arsip existing; Company baru memakai `aa-<id>`. PostgreSQL/Qdrant/file memakai workspace tersebut; arsip admin tetap `xm`. Setiap import tetap membawa `agent_name`.
 
 ## Matching defaults
 
@@ -30,6 +30,8 @@ Panduan lengkap, tabel peran, dan langkah upgrade: [docs/UPGRADE_V4.0.md](docs/U
 - Imported location-index alternatives: at most 4 km, WARM pending buyer confirmation; distance never overrides mandatory constraints.
 
 ## Matching workspace update
+
+Semua kontrol Pengaturan di bawah sekarang berada di **AutoAudit → Pengaturan Property**. XM tetap menjalankan matching, status, upload operasional, filter kerja, dan ekspor. Default arah/status personal diubah di AA; filter sementara di XM tidak menimpa default.
 
 - Upload menawarkan mode **Company** (keyword milik company, tanpa membedakan huruf besar/kecil, termasuk tanda tangan pesan) atau **Sales** (nomor kontak utama/alternatif dalam watchlist company). Salah satu sisi pasangan harus termasuk company/sales yang dipantau; sisi lain dicari dari seluruh arsip workspace tersebut. Mode Sales ditolak bila watchlist company kosong, dan tidak memakai nama pengunggah/pengirim sebagai nomor pemilik listing.
 - Mode upload tersimpan pada riwayat; mode terakhir yang berhasil diproses menjadi default company untuk proses ulang berikutnya. Company baru mulai pada mode Company tanpa saringan keyword. Aturan keyword/watchlist dibaca kembali saat worker mencocokkan, sehingga aturan yang sudah berubah setelah upload tetap berlaku. File duplikat tidak menambah pesan; bila mode diganti, arsip yang ada diproses ulang sebagai maintenance, tanpa menandai pasangan lama sebagai penemuan upload baru.
@@ -54,25 +56,25 @@ Panduan lengkap, tabel peran, dan langkah upgrade: [docs/UPGRADE_V4.0.md](docs/U
 
 ## Login dan peran
 
-Default akun administrator platform lokal: `admin@autoaudit.id` / `secret123` (ganti lewat `XM_ADMIN_EMAIL` dan `XM_ADMIN_PASSWORD` sebelum instalasi pertama, lalu ganti password dari **Pengaturan → Akun saya**). Password disimpan sebagai PBKDF2 hash dan sesi login berlaku tujuh hari.
+Login hanya melalui AutoAudit. Password lokal ditolak dan startup tidak membuat akun password. Konfigurasi SSO hilang menghasilkan error, bukan fallback lokal.
 
 Tiga peran:
 
-- **Administrator platform** (`admin`): membuat company, masuk ke company mana pun dari menu **Perusahaan**, dan mengangkat super admin.
-- **Super admin company** (`company_admin`): menambah, mengunci, dan mereset akun anggota; mengunggah data; mengatur kata kunci (dan mengunci kata kunci), pengelompokan listing, nomor sales, toleransi, bobot, glosarium, dan indeks lokasi.
+- **Administrator platform** (`admin`): principal Superadmin AA, dapat membuka workspace Company; Company/akun dikelola di AA.
+- **Pengelola Company** (`company_admin`): satu principal akun Company AA; upload operasional di XM, pengaturan dan kunci anggota melalui AA. Tidak ada promosi Team Access menjadi admin tambahan.
 - **Anggota** (`user`): mencocokkan, menandai status, mengunduh PDF, dan melihat Beranda, Match Terbaru, serta Stok Sales.
 
 Akun terkunci menampilkan layar kosong dengan latar blur dan tautan WhatsApp admin. Hak akses ditegakkan di server pada setiap permintaan.
 
 ### Masuk lewat AutoAudit
 
-Dengan `XM_SSO_ENABLED=1` dan `AUTOAUDIT_BASE_URL` terisi, Property menjadi modul AutoAudit. Di AutoAudit, `PROPERTY_PUBLIC_BASE_URL` harus berisi alamat Property dan `PROPERTY_SSO_SECRET` harus terisi; Property sendiri tidak menyimpan secret.
+Wajib `XM_SSO_ENABLED=1` dan `AUTOAUDIT_BASE_URL`. AA memakai `PROPERTY_PUBLIC_BASE_URL` dan `PROPERTY_SSO_SECRET`; API/worker XM menerima secret tersebut khusus relay audit, tanpa membuka tiket SSO. Browser memakai `AUTOAUDIT_PUBLIC_URL`, canonical `XM_PUBLIC_BASE_URL`, allowlist tambahan `AUTOAUDIT_SSO_ORIGINS`; cookie Secure untuk HTTPS. Compose memuat `.env` di API/worker.
 
-- **Siapa yang masuk:** company yang modul Property-nya aktif di AutoAudit (Company Settings → Modules) masuk sebagai super admin company. Superadmin dan Superadmin user AutoAudit masuk sebagai administrator platform. Superior (Team Access) tidak mendapat akses.
-- **Company dibuat otomatis** saat company itu pertama kali membuka Property: workspace `aa-<id company AutoAudit>`, langsung terpasang ke company AutoAudit-nya sehingga daftar sales di Unggah Data siap dipakai. Company lama tidak disentuh.
-- **Dua asal akun:** akun dari AutoAudit hanya bisa masuk lewat AutoAudit (login password ditolak), akun yang dibuat di sini tetap memakai email dan password. Menu Perusahaan menandai tiap company "Akun dari AutoAudit" atau "Akun XM".
-- **Company dari AutoAudit tidak bisa menambah anggota** di Tim & Akses, karena akun ber-password tidak ikut terputus saat modul dimatikan.
-- **Sesi:** paling lama 15 menit, lalu browser memperbaruinya sendiri lewat AutoAudit. Setiap permintaan ditanyakan ulang ke AutoAudit: modul dimatikan atau sesi AutoAudit dicabut berarti akses langsung putus. Bila AutoAudit tidak dapat dihubungi, permintaan dijawab 503 dan sesi tidak dihapus.
+- **Principal:** Company aktif dengan modul Property menjadi `company:<id>` / `company_admin`; Team Access non-CS dengan izin Agent Developer menjadi `superior:<id>` / `user`; Superadmin mengikuti akses existing. Anggota berbagi workspace Company; scope Sales/divisi AA tidak menjadi filter baru Property.
+- **Workspace:** mapping Company existing dipakai kembali; hanya Company belum terhubung mendapat `aa-<id>`. Tidak mencocokkan identitas dari email/nama atau menghapus arsip lokal otomatis.
+- **Pengaturan:** hanya melalui AA, termasuk keyword pribadi, matching, glossary/lokasi, watchlist, sumber dan workflow key. Backend XM membutuhkan tiket control AA; cookie XM dan workflow key tidak cukup. Akun/password/Company lokal tidak dapat diedit.
+- **Sesi:** maksimal 15 menit; validasi AA sekali/request di luar connection DB. Reload browser membaca akun AA aktif; actor sama memperbarui sesi dan return hash aman, actor berbeda mendapat konteks baru. Poll auth lima detik/focus tab dihapus; lock/revoke terlihat pada request berikutnya. `401` memulai SSO; `403/503` tidak membuat loop. Gangguan AA tidak menghapus sesi. Logout cookie AA saja belum mencabut salinan tiket root/Company selama maksimal 15 menit.
+- **Logout:** tutup XM → signed-out → logout AA → login AA. Penanda Property memungkinkan pilihan AutoAudit/Agent Developer sesudah login yang berhak; default AutoAudit tiga detik.
 - **Saat modul dimatikan** data company tetap tersimpan dan sambungan sales tetap menarik chat.
 
 ## Sambungan AutoAudit
@@ -80,16 +82,18 @@ Dengan `XM_SSO_ENABLED=1` dan `AUTOAUDIT_BASE_URL` terisi, Property menjadi modu
 Chat dari sales AutoAudit bisa masuk ke sebuah company tanpa unggah manual. Rancangannya ada di [docs/DESAIN_INTEGRASI_AUTOAUDIT_2026-10-09.md](docs/DESAIN_INTEGRASI_AUTOAUDIT_2026-10-09.md).
 
 - **Mengaktifkan:** isi `AUTOAUDIT_BASE_URL` dan `AUTOAUDIT_API_KEY` di environment backend (lihat `.env.example`), lalu jalankan ulang API dan worker. Tanpa keduanya fitur ini mati.
-- **Memasang company AutoAudit:** di menu Perusahaan, administrator platform memilih "Company AutoAudit" saat menambah company atau lewat ikon pensil. Tanpa itu company hanya bisa unggah manual.
-- **Menyambungkan:** admin company (atau administrator platform) membuka Unggah Data, memilih sales sumber, lalu menekan Sambungkan. Daftar sales hanya berisi sales dari company AutoAudit yang dipasang, dan server menolak sales di luar itu. Isi "Nama sumber" dengan nama yang sama seperti unggahan sebelumnya supaya pesan lama dikenali dan stok tidak tercatat dua kali.
+- **Mapping Company:** stable Company ID AA dan workspace existing yang direview. Rekonsiliasi arsip lokal harus eksplisit sebelum cutover; bukan melalui nama/email atau membuat Company lokal baru.
+- **Menyambungkan:** Company/Superadmin membuka AA → Pengaturan Property → Sumber data. Daftar Sales hanya Company terhubung. Nama sumber sama dengan unggahan sebelumnya mempertahankan dedupe. XM menampilkan status dan tautan pengaturan.
 - **Kapan data ditarik:** worker mengecek tiap sambungan setiap `AUTOAUDIT_CHECK_SECONDS` (bawaan 10 menit) dan hanya mengunduh bila `last_updated_at` dataset berubah. Tombol **Sinkronkan sekarang** (admin company) langsung mengambil data yang tersedia saat itu.
 - **Webhook (opsional, supaya lebih cepat):** isi `AUTOAUDIT_WEBHOOK_TOKEN` dengan teks acak panjang, lalu di AutoAudit tambahkan langganan webhook dengan link `https://<alamat Property>/api/hooks/autoaudit/<token>` dan grup `sync`. Untuk lokal, arahkan ke tunnel HTTPS. Kiriman AutoAudit tidak bertanda tangan, jadi token itu satu-satunya pengaman; isi kiriman hanya dipakai sebagai tanda untuk mengecek lebih awal.
 - **Status:** Menunggu data (dataset belum ada atau impor sebelumnya masih diproses), Menarik, Terbaru sampai (waktu dataset), Gagal (dicoba lagi pada cek berikutnya).
 - **Uji baca:** `python3 scripts/autoaudit_probe.py` mencetak daftar sales; dengan `--sales-id`, `--start`, `--end`, dan `--manual-json` ia membandingkan sidik pesan API dengan file unggahan lama. Hanya memanggil `GET`.
 
-Semua panggilan ke AutoAudit bersifat baca. Property tidak pernah memicu sinkronisasi WhatsApp.
+Penarikan dataset tetap read-only dan tidak memicu sinkronisasi WhatsApp. POST validasi sesi/control dan relay aktivitas memakai endpoint AA terpisah.
 
 ## Log aktivitas
+
+Perubahan pengaturan dari AA disimpan atomik dengan outbox XM. Worker mengirim maksimal 50 event/60 detik dengan budget jaringan sekitar lima detik; ack baru mengubah sent. AA memakai receipt UUID + PR0001 atomik. Company/Superior tercatat, Superadmin/Login As tidak menjadi company activity. Log pengaturan/receipt tanpa batas umur sesuai keputusan 16 Oktober 2026; view tetap 90 hari, PDF integration tujuh hari. Relay tidak membawa raw key/tiket/isi chat.
 
 Menu **Aktivitas** (hanya administrator platform) menampilkan siapa melakukan apa di semua company, dalam kalimat biasa. Company tidak dapat melihatnya dengan cara apa pun. Rancangannya ada di [docs/DESAIN_ACTIVITY_LOG_2026-10-09.md](docs/DESAIN_ACTIVITY_LOG_2026-10-09.md).
 
@@ -112,18 +116,19 @@ Versi sekarang: `4.0.0`. Lihat [docs/UPGRADE_V4.0.md](docs/UPGRADE_V4.0.md) untu
 
 ## Admin and mobile update (v3.0, diperbarui di v4.0)
 
-- Migration adds `role` and `is_locked` to existing users without replacing matching data. The configured bootstrap admin is promoted once and receives the configured password; subsequent restarts preserve the password and active sessions.
-- Akun dikelola dari **Tim & Akses** (super admin company) atau **Perusahaan** (administrator platform). Password dan email yang diubah mencabut sesi akun itu. Kunci akun berlaku pada permintaan berikutnya; UI memeriksa status akun tiap 5 detik dan saat jendela difokuskan.
+- Riwayat v3/v4 menambahkan `role`/`is_locked` tanpa mengganti data matching. Kontrak satu pintu tidak menjalankan bootstrap password. Akun/password dikelola di AA; kunci modul existing dikelola dari AA dengan `xm.users.is_locked`. Tidak ada poll auth lima detik/focus tab.
 - Hanya super admin (dan administrator platform) yang dapat mengubah pengaturan company, upload, glosarium, indeks lokasi, dan penghitungan ulang. Akun terkunci hanya dapat melihat sesinya dan keluar. Hak akses ditegakkan di API, termasuk untuk permintaan langsung.
 
 
 ## Isolated user workspaces
 
-From **Panel Admin**, choose **Data & setting** on an account. The settings drawer identifies the selected email; matching, JSON imports, glossary CSVs, location data, default searches, tolerances, and weights all belong to that account. **Workspace saya** returns to the admin's own archive. Users can only read and match their own data.
+Superadmin membuka workspace dari daftar Company XM; create/rename/account management di AA. Matching, import, kamus, lokasi, dan toleransi milik workspace Company; preferensi personal milik UUID actor. Anggota Company sama berbagi data Company.
 
 Admin requests carry a selected user ID, checked against the authenticated role on the server. Each request and worker job gets its own workspace context. PostgreSQL queries, uploaded-file directories, Qdrant searches/payloads, result caches, calendar counts, exports, and maintenance jobs are scoped to that workspace. A normal user cannot switch owner by changing a request header or submitting another account's document ID. The selected workspace stays local to the browser view, so admin tabs can manage different users independently.
 
-The existing archive and its settings remain in the admin workspace; nothing is automatically copied to a new company. Upload the appropriate source JSON and location data from that company's **Unggah Data** and **Pengaturan** pages. Schema upgrades preserve existing records and add ownership for accounts, glossary entries, and jobs.
+Arsip existing dipertahankan; mapping AA terhubung tidak dipindah namespace otomatis. Upload JSON operasional di XM, setting/lokasi melalui AA. Sebelum cutover, review mapping/conflict dan izin DB/migration. `ensure_schema` berjalan saat startup API/worker; jangan memulai server untuk menguji schema tanpa izin DB.
+
+Kontrak aktif: [Property satu pintu](../sales-audit-2/agent-docs/domains/property/README.md). [Desain](docs/DESAIN_SATU_PINTU_AUTOAUDIT_PROPERTY_2026-10-16.md), [rencana](docs/RENCANA_IMPLEMENTASI_SATU_PINTU_AUTOAUDIT_PROPERTY_2026-10-16.md). Focused local checks bukan bukti DB, browser, atau deployment. Fixture DB lama berbasis password perlu disesuaikan ke SSO sebelum menguji cutover; jangan menjalankan full discover dengan env normal.
 
 `api/test_user_isolation.py` exercises real HTTP requests against a disposable PostgreSQL database: identical uploads in different accounts, settings/glossary/location independence, forbidden owner switches and foreign document IDs, cached and uncached results, exports, worker ownership, reindexing, and concurrent requests. Run the regression suite with `XM_TEST_DATABASE_URL` pointing only to an isolated test database.
 

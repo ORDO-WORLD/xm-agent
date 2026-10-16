@@ -10,6 +10,7 @@ import re
 import secrets
 import shutil
 import uuid
+import activity
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -80,27 +81,31 @@ def create_key(payload: KeyRequest, request: Request):
         row = conn.execute('''INSERT INTO xm.integration_keys(id,company_id,created_by,name,token_hash)
           VALUES(%s,%s,%s,%s,%s) RETURNING id,name,created_at,saved_at''',
           (uuid.uuid4(), workspace_id(), current_user(request)['id'], payload.name, hashlib.sha256(token.encode()).hexdigest())).fetchone()
+        activity.record(conn, 'change', 'workflow.key', 'membuat API key workflow', {'key_id': str(row['id'])})
         conn.commit()
     return {**row, 'token': token, 'scope': 'property:export', 'company_id': workspace_id()}
 
 
 @router.get('/keys')
-def list_keys():
+def list_keys(offset: int = 0):
     with connect() as conn:
         rows = conn.execute('''SELECT id,name,created_at,last_used_at,revoked_at,saved_at FROM xm.integration_keys
-          WHERE company_id=%s ORDER BY created_at DESC''', (workspace_id(),)).fetchall()
-    return {'keys': rows}
+          WHERE company_id=%s ORDER BY created_at DESC,id DESC LIMIT 51 OFFSET %s''', (workspace_id(), max(0, offset))).fetchall()
+    return {'keys': rows[:50], 'has_more': len(rows) > 50}
 
 
 @router.put('/keys/{key_id}')
 def update_key(key_id: uuid.UUID, payload: KeyUpdate):
     """Rename or explicitly acknowledge storage without rotating or exposing the secret."""
     with connect() as conn:
+        before = conn.execute('SELECT name,saved_at FROM xm.integration_keys WHERE id=%s AND company_id=%s FOR UPDATE', (key_id, workspace_id())).fetchone()
         row = conn.execute('''UPDATE xm.integration_keys SET name=%s,
           saved_at=CASE WHEN %s THEN coalesce(saved_at,now()) ELSE saved_at END
           WHERE id=%s AND company_id=%s AND revoked_at IS NULL
           RETURNING id,name,created_at,last_used_at,revoked_at,saved_at''',
           (payload.name, payload.confirm_saved, key_id, workspace_id())).fetchone()
+        if row and before and (before['name'] != payload.name or (payload.confirm_saved and before['saved_at'] is None)):
+            activity.record(conn, 'change', 'workflow.key', 'mengubah API key workflow', {'key_id': str(key_id)})
         conn.commit()
     if not row:
         raise HTTPException(404, 'Token tidak ditemukan atau sudah dicabut.')
@@ -110,8 +115,11 @@ def update_key(key_id: uuid.UUID, payload: KeyUpdate):
 @router.delete('/keys/{key_id}')
 def revoke_key(key_id: uuid.UUID):
     with connect() as conn:
+        before = conn.execute('SELECT revoked_at FROM xm.integration_keys WHERE id=%s AND company_id=%s FOR UPDATE', (key_id, workspace_id())).fetchone()
         row = conn.execute('''UPDATE xm.integration_keys SET revoked_at=coalesce(revoked_at,now())
           WHERE id=%s AND company_id=%s RETURNING id''', (key_id, workspace_id())).fetchone()
+        if row and before and before['revoked_at'] is None:
+            activity.record(conn, 'change', 'workflow.key', 'mencabut API key workflow', {'key_id': str(key_id)})
         conn.commit()
     if not row:
         raise HTTPException(404, 'Token tidak ditemukan.')

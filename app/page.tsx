@@ -6,6 +6,7 @@ import { AppShell } from '@/components/app/app-shell';
 import { LoadingRows } from '@/components/app/primitives';
 import { LockedScreen } from '@/components/app/locked-screen';
 import { LoginScreen } from '@/components/app/login-screen';
+import { AutoAuditSettingsLink, PropertyDirectory } from '@/components/app/autoaudit-settings-link';
 import { LottiePlayer } from '@/components/lottie/lottie-player';
 import { useRoute } from '@/lib/router';
 import { CompanyProvider, ManageProvider, SessionProvider, useAuth, useCompany, useManage, useSession } from '@/lib/session';
@@ -16,9 +17,6 @@ const MatchPage = dynamic(() => import('@/components/pages/match-page'), { ssr: 
 const RecentPage = dynamic(() => import('@/components/pages/recent-page'), { ssr: false, loading });
 const StockPage = dynamic(() => import('@/components/pages/stock-page'), { ssr: false, loading });
 const UploadPage = dynamic(() => import('@/components/pages/upload-page'), { ssr: false, loading });
-const TeamPage = dynamic(() => import('@/components/pages/team-page'), { ssr: false, loading });
-const SettingsPage = dynamic(() => import('@/components/pages/settings-page'), { ssr: false, loading });
-const CompaniesPage = dynamic(() => import('@/components/pages/companies-page'), { ssr: false, loading });
 const ActivityPage = dynamic(() => import('@/components/pages/activity-page'), { ssr: false, loading });
 
 function Workspace() {
@@ -43,9 +41,9 @@ function Workspace() {
       case 'match-baru': return <RecentPage navigate={navigate} />;
       case 'stok': return <StockPage navigate={navigate} />;
       case 'data': return <UploadPage navigate={navigate} />;
-      case 'tim': return <TeamPage />;
-      case 'pengaturan': return <SettingsPage params={params} navigate={navigate} />;
-      case 'perusahaan': return <CompaniesPage navigate={navigate} />;
+      case 'tim': return <AutoAuditSettingsLink team />;
+      case 'pengaturan': return <AutoAuditSettingsLink />;
+      case 'perusahaan': return <PropertyDirectory />;
       case 'aktivitas': return <ActivityPage params={params} navigate={navigate} />;
       default: return <DashboardPage navigate={navigate} params={params} />;
     }
