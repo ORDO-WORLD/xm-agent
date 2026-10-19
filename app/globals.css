@@ -192,7 +192,7 @@ body {
 @media (max-width: 1000px) {
   .company-desktop-profile { display: none; }
   .company-mobile-logo { display: block; flex-shrink: 0; cursor: pointer; }
-  .company-mobile-logo img { width: auto; max-width: 92px; height: 36px; object-fit: contain; }
+  .company-mobile-logo img { width: 100px; max-width: 100px; height: auto; max-height: 54px; object-fit: contain; }
   .company-navbar-heading { flex: 1; }
   .company-mobile-account { display: flex; flex-shrink: 0; align-items: center; padding: 4px; border-radius: 9999px; background: #eee; }
   .company-mobile-account > button { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9999px; color: #374151; cursor: pointer; }
@@ -1002,6 +1002,11 @@ body:has(.integration-revoke-dialog) .settings-tabs .tabs__panel { overflow:hidd
 .dashboard-page :is(.xm-card,.rounded-3xl,.rounded-2xl,.chip) { border-radius:8px; }
 .dashboard-page .dashboard-hero-button { min-height:40px; height:auto; padding:9px 16px; border-radius:6px; font-size:14px; line-height:1.5; }
 .dashboard-page .dashboard-match-button { background:#fff; cursor:pointer; }
+@media (max-width:639px) {
+  .dashboard-hero-actions { width:100%; flex-wrap:nowrap; gap:8px; }
+  .dashboard-page .dashboard-hero-actions .dashboard-hero-button { flex:1 1 0; min-width:0; justify-content:center; padding:8px 6px; font-size:12px; white-space:normal; text-align:center; gap:6px; }
+  .dashboard-hero-actions .dashboard-hero-button > svg { width:16px; height:16px; flex-shrink:0; margin-right:0; }
+}
 .dashboard-keyword-note { display:flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid #fde68a; border-radius:6px; background:#fffbeb; color:#92400e; font-size:13px; line-height:1.5; }
 .dashboard-page .dashboard-periods { display:flex; flex-wrap:nowrap; width:100%; margin:0; padding:0 0 2px; overflow-x:auto; gap:8px; }
 .dashboard-page .dashboard-periods > button, .dashboard-page .dashboard-periods > [data-slot="popover-trigger"] { flex:1 0 auto; min-width:max-content; }
@@ -1048,6 +1053,9 @@ body:has(.integration-revoke-dialog) .settings-tabs .tabs__panel { overflow:hidd
 .match-filter-row { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
 .match-filter-row > .team-search { flex:1; min-width:170px; }
 .match-filter-row > .match-phone-search { flex:.6; }
+.match-page .team-search button, .match-page .search-field button, .match-page [data-slot="search-field-clear-button"] { cursor:pointer; }
+.match-search-shortcut { display:none; flex-shrink:0; font-family:inherit; font-size:11px; font-weight:400; color:#6b7280; white-space:nowrap; }
+@media (min-width:1001px) { .match-search-shortcut { display:inline-block; } }
 .match-filter-panel > p { margin-top:12px; font-size:12px; line-height:1.6; }
 .match-page .match-workspace-grid h2 { font-size:16px; font-weight:600; }
 .match-page .match-workspace-grid .xm-card { border-radius:8px; border:1px solid #e2e8f0; box-shadow:none; }

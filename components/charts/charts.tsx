@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import { Bar, Doughnut, Line } from 'react-chartjs-2';
+import type { Plugin, Scale } from 'chart.js';
 import { areaGradient, axisStyle, categorical, centerText, colors, legend, tooltip, type ChartOptions } from '@/components/charts/chart-setup';
 import { number } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -65,9 +66,22 @@ export function RingChart({ items, caption, ariaLabel, className }: { items: Sli
 type BarSeries = { label: string; data: number[]; color: string };
 
 /** Rounded bars: vertical or horizontal, grouped or stacked. */
-export function BarsChart({ labels, series, horizontal, stacked, height = 280, ariaLabel }: {
-  labels: string[]; series: BarSeries[]; horizontal?: boolean; stacked?: boolean; height?: number; ariaLabel: string;
+export function BarsChart({ labels, series, horizontal, stacked, height = 280, ariaLabel, labelMaxWidth }: {
+  labels: string[]; series: BarSeries[]; horizontal?: boolean; stacked?: boolean; height?: number; ariaLabel: string; labelMaxWidth?: number;
 }) {
+  const plugins = useMemo<Plugin<'bar'>[]>(() => [{
+    id: 'fullBarLabelOnHover',
+    afterEvent(chart, { event }) {
+      const y = chart.scales.y;
+      if (!horizontal || !labelMaxWidth || !y || event.x === null || event.y === null || event.type === 'mouseout') {
+        chart.canvas.removeAttribute('title');
+        return;
+      }
+      const index = y.getValueForPixel(event.y);
+      const overLabel = event.x >= y.left && event.x < chart.chartArea.left && event.y >= y.top && event.y <= y.bottom;
+      chart.canvas.title = overLabel && index !== undefined ? labels[index] ?? '' : '';
+    },
+  }], [horizontal, labelMaxWidth, labels]);
   const data = useMemo(() => ({
     labels,
     datasets: series.map((item) => ({
@@ -81,12 +95,27 @@ export function BarsChart({ labels, series, horizontal, stacked, height = 280, a
       indexAxis: horizontal ? 'y' : 'x', responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
       plugins: { legend: legend(series.length > 1), tooltip: tooltip({ callbacks: { label: (item: { dataset: { label?: string }; parsed: { x: number | null; y: number | null } }) => ` ${item.dataset.label}: ${number(horizontal ? item.parsed.x : item.parsed.y)}` } }) },
       scales: {
-        [category]: { ...(horizontal ? axisStyle.y : axisStyle.x), stacked, beginAtZero: undefined, grid: { display: false }, ticks: { ...(horizontal ? axisStyle.y.ticks : axisStyle.x.ticks), padding: 6, autoSkip: horizontal ? false : labels.length > 14, maxRotation: 0 } },
+        [category]: { ...(horizontal ? axisStyle.y : axisStyle.x), stacked, beginAtZero: undefined, grid: { display: false }, ticks: { ...(horizontal ? axisStyle.y.ticks : axisStyle.x.ticks), padding: 6, autoSkip: horizontal ? false : labels.length > 14, maxRotation: 0,
+          ...(horizontal && labelMaxWidth ? { callback: function (this: Scale, value: string | number) {
+            const label = this.getLabelForValue(Number(value));
+            const width = Math.min(labelMaxWidth, this.chart.width * 0.3);
+            const ctx = this.chart.ctx;
+            ctx.save();
+            ctx.font = "12.5px 'Instrument Sans Variable', 'Instrument Sans', sans-serif";
+            let shortened = label;
+            if (ctx.measureText(label).width > width) {
+              while (shortened.length && ctx.measureText(`${shortened}…`).width > width) shortened = shortened.slice(0, -1);
+              shortened = `${shortened.trimEnd()}…`;
+            }
+            ctx.restore();
+            return shortened;
+          } } : {}),
+        } },
         [value]: { ...(horizontal ? axisStyle.x : axisStyle.y), stacked, beginAtZero: true, grid: { color: colors.grid }, ticks: { precision: 0, font: { size: 12.5 } } },
       },
     } as ChartOptions<'bar'>;
-  }, [horizontal, stacked, series.length, labels.length]);
-  return <figure className="m-0 w-full" style={{ height }} aria-label={ariaLabel}><Bar data={data} options={options} /></figure>;
+  }, [horizontal, stacked, series.length, labels.length, labelMaxWidth]);
+  return <figure className="m-0 w-full" style={{ height }} aria-label={ariaLabel}><Bar data={data} options={options} plugins={plugins} /></figure>;
 }
 
 /** A tiny trend line for a card; no axes, no legend. */

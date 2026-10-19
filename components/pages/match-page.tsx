@@ -1,10 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Accordion, Button, Chip, Dropdown, Label, SearchField, Switch, toast, useOverlayState } from '@heroui/react';
 import { Header } from 'react-aria-components';
 import { ArrowLeft, Check, ChevronDown, Download, FileText, ListChecks, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
-import { EmptyState, ErrorNotice, LoadingRows, Segmented } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, LoadingIndicator, Segmented } from '@/components/app/primitives';
 import { RangeButton, type Period, type Preset } from '@/components/app/period-picker';
 import { useStatusActions } from '@/components/app/status-menu';
 import { RecentSourceCard } from '@/components/match/recent-source-card';
@@ -53,6 +53,19 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
   const api = useApi();
   const { company } = useCompany();
   const hasCompany = !!company;
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if (!window.matchMedia('(min-width: 1001px)').matches) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && !document.querySelector('[role="dialog"]')) {
+        event.preventDefault();
+        searchInput.current?.focus();
+        searchInput.current?.select();
+      }
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, []);
   const scopeKey = JSON.stringify([company?.matching_mode, company?.search_terms, company?.tracked_phones]);
 
   const [direction, setDirection] = useState<Direction>(params?.get('arah') === 'property' ? 'property' : 'buyer');
@@ -125,7 +138,7 @@ export default function MatchPage({ params, navigate }: { params?: URLSearchPara
       </fieldset>
       <section className={cn('match-filter-panel', mobileDetail && 'hidden xl:block')} aria-label="Filter pencocokan">
         <div className="match-filter-row">
-          <div className="team-search"><Search className="size-4" aria-hidden="true" /><input type="search" aria-label="Cari ID buyer atau listing" placeholder="Cari ID buyer atau listing..." value={filters.publicId} onChange={(event) => update({ publicId: event.target.value })} />{filters.publicId && <button type="button" aria-label="Hapus pencarian ID" onClick={() => update({ publicId: '' })}><X className="size-4" /></button>}</div>
+          <div className="team-search"><Search className="size-4" aria-hidden="true" /><input ref={searchInput} type="search" aria-label="Cari ID buyer atau listing" aria-keyshortcuts="Control+f Meta+f" placeholder="Cari ID buyer atau listing..." value={filters.publicId} onChange={(event) => update({ publicId: event.target.value })} />{filters.publicId && <button type="button" aria-label="Hapus pencarian ID" onClick={() => { update({ publicId: '' }); searchInput.current?.focus(); }}><X className="size-4" /></button>}<kbd className="match-search-shortcut" aria-hidden="true">Ctrl + F</kbd></div>
           <MatchPeriodSelect label="Buyer" value={filters.buyerPeriod} onChange={(value) => update({ buyerPeriod: value })} markers={markers.buyer} onMonthChange={(month) => loadMarkers('buyer', month)} />
           <MatchPeriodSelect label="Listing" value={filters.listingPeriod} onChange={(value) => update({ listingPeriod: value })} markers={markers.property} onMonthChange={(month) => loadMarkers('property', month)} />
           <Dropdown><Dropdown.Trigger className="upload-history-sort"><span>Tampilkan</span><ChevronDown className="size-4" /></Dropdown.Trigger><Dropdown.Popover placement="bottom end" className="upload-history-sort-menu recent-display-menu"><Dropdown.Menu aria-label="Jenis hasil dan status data" selectionMode="multiple" selectedKeys={new Set([...filters.temps, ...filters.stock])} onSelectionChange={(keys) => {
@@ -285,7 +298,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
                 <SearchField.Group><SearchField.SearchIcon /><SearchField.Input className="h-12 text-base" placeholder={groupBy === 'phone' ? 'Cari nama sales atau nomor' : 'Cari nama pengirim'} /><SearchField.ClearButton /></SearchField.Group>
               </SearchField>
               <ErrorNotice message={groups.error} onRetry={groups.reload} />
-              {groups.loading && <LoadingRows rows={4} />}
+              {groups.loading && <LoadingIndicator minimal />}
               {!groups.loading && groups.data && groups.data.groups.length === 0 && <ListEmpty onReset={onReset} />}
               {!groups.loading && groups.data && groups.data.groups.length > 0 && (
                 <Accordion allowsMultipleExpanded expandedKeys={expanded} onExpandedChange={setExpanded} className="w-full">
@@ -317,7 +330,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
           ) : (
             <>
               <ErrorNotice message={flat.error} onRetry={flat.reload} />
-              {flat.loading && <LoadingRows rows={5} />}
+              {flat.loading && <LoadingIndicator minimal />}
               {!flat.loading && flat.data && flat.data.rows.length === 0 && <ListEmpty onReset={onReset} />}
               {!flat.loading && <div className="space-y-3">{flat.data?.rows.map((row) => card(row))}</div>}
               {flat.data && (offset > 0 || flat.data.has_more) && (
@@ -350,7 +363,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
             </div>
             <div className="max-h-none space-y-3 bg-background p-3 sm:p-4 xl:max-h-[calc(100dvh-14rem)] xl:overflow-y-auto">
               {!active && <EmptyState animation="searching" title={`Pilih ${sourceLabel} di sebelah kiri`} description={`Hasil Hot, Warm, atau belum cocok untuk ${sourceLabel} itu akan muncul di sini.`} />}
-              {active && recs.loading && <LoadingRows rows={2} />}
+              {active && recs.loading && <LoadingIndicator minimal />}
               <ErrorNotice message={recs.error} onRetry={recs.reload} />
               {!recs.loading && group && (
                 <>
@@ -400,7 +413,7 @@ function MatchWorkspace({ direction, base, useGroups, groupBy, enabled, temps, g
         </div>
       )}
       {statusDialog}
-      <ExportAllModal state={exportAll} direction={direction} filters={base} />
+      <ExportAllModal state={exportAll} direction={direction} filters={base} minimalLoading />
     </>
   );
 }
@@ -461,7 +474,7 @@ function GroupRows({ base, groupBy, groupKey, render }: { base: Base; groupBy: G
   }
 
   if (first.error) return <ErrorNotice message={first.error} onRetry={first.reload} />;
-  if (!first.data) return <LoadingRows rows={2} />;
+  if (!first.data) return <LoadingIndicator minimal />;
   const rows = [...first.data.rows, ...extra];
   const hasMore = !done && first.data.has_more;
   return (

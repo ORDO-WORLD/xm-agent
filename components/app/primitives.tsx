@@ -130,11 +130,11 @@ export function ErrorNotice({ message, onRetry }: { message: string; onRetry?: (
   );
 }
 
-export function LoadingIndicator({ message = 'Memuat hasil sesuai pilihan Anda…' }: { message?: string }) {
+export function LoadingIndicator({ message = 'Memuat hasil sesuai pilihan Anda…', minimal = false }: { message?: string; minimal?: boolean }) {
   return (
-    <output aria-live="polite" className="flex items-center gap-3 rounded-2xl border border-accent/20 bg-accent-soft/40 px-4 py-2">
+      <output aria-live="polite" className={minimal ? 'flex items-center gap-2' : 'flex items-center gap-3 rounded-2xl border border-accent/20 bg-accent-soft/40 px-4 py-2'}>
       <LottiePlayer name="loading" className="w-12 shrink-0" />
-      <p className="text-base font-semibold text-accent">{message}</p>
+        <p className={minimal ? 'text-sm font-medium text-accent' : 'text-base font-semibold text-accent'}>{message}</p>
     </output>
   );
 }

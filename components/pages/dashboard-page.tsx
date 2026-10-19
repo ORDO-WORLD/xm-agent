@@ -72,7 +72,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
                 {stats ? <>Saat ini ada <strong className="text-white">{number(stats.buyers_ready)}</strong> buyer dan <strong className="text-white">{number(stats.listings_ready)}</strong> listing yang masih ready.</> : 'Memuat ringkasan…'}
               </p>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="dashboard-hero-actions flex flex-wrap gap-3">
               {canUpload && (
                 <ShimmerButton onClick={() => navigate?.('data')} background="oklch(0.48 0.235 265)" borderRadius="6px" shimmerColor="#a5f3fc" className="dashboard-hero-button h-13 px-6 text-base font-semibold">
                   <UploadCloud className="mr-2 size-5" aria-hidden="true" />Unggah chat baru
@@ -161,7 +161,7 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
 
           <Panel title="Lokasi paling dicari" description="Jumlah buyer yang mencari di lokasi itu dibanding stok listing yang masih ready.">
             {data.locations.length ? (
-              <BarsChart horizontal height={Math.max(260, data.locations.length * 46)} ariaLabel="Diagram batang lokasi paling dicari dibanding stok"
+              <BarsChart horizontal labelMaxWidth={140} height={Math.max(260, data.locations.length * 46)} ariaLabel="Diagram batang lokasi paling dicari dibanding stok"
                 labels={data.locations.map((item) => item.label)}
                 series={[{ label: 'Buyer mencari', data: data.locations.map((item) => item.value), color: colors.blue }, { label: 'Listing ready', data: data.locations.map((item) => item.stock), color: colors.cyan }]} />
             ) : <EmptyState compact title="Belum ada lokasi terbaca" />}
@@ -189,8 +189,8 @@ export default function DashboardPage({ navigate, params }: { navigate?: Navigat
 
           <Panel title="Listing per sales" description={data.top_sales.group_by === 'phone' ? 'Dikelompokkan menurut nomor telepon di pesan (atur di Pengaturan).' : 'Dikelompokkan menurut pengirim pesan (atur di Pengaturan).'}>
             {data.top_sales.rows.length ? (
-              <BarsChart horizontal height={Math.max(260, data.top_sales.rows.length * 44)} ariaLabel="Diagram batang listing ready per sales"
-                labels={data.top_sales.rows.map((row) => (row.contact_name && data.top_sales.group_by === 'phone' ? `${row.contact_name} (${row.label.slice(-4)})` : row.label).slice(0, 26))}
+              <BarsChart horizontal labelMaxWidth={140} height={Math.max(260, data.top_sales.rows.length * 44)} ariaLabel="Diagram batang listing ready per sales"
+                labels={data.top_sales.rows.map((row) => row.contact_name && data.top_sales.group_by === 'phone' ? `${row.contact_name} (${row.label.slice(-4)})` : row.label)}
                 series={[{ label: 'Listing ready', data: data.top_sales.rows.map((row) => row.value), color: colors.navy }]} />
             ) : <EmptyState compact title="Belum ada listing" />}
           </Panel>
@@ -230,7 +230,7 @@ function GapList({ title, rows }: { title: string; rows: { key: string; label: s
         {rows.slice(0, 5).map((row) => (
           <li key={row.key}>
             <div className="flex items-baseline justify-between gap-3 text-[0.95rem]">
-              <span className="min-w-0 truncate font-semibold">{row.label}</span>
+              <span className="min-w-0 truncate font-medium">{row.label}</span>
               <span className="dashboard-opportunity-counts"><span className="dashboard-buyer-count"><Users className="size-3.5" aria-hidden="true" /><strong>{number(row.buyers)}</strong> buyer</span><span className="dashboard-listing-count"><Boxes className="size-3.5" aria-hidden="true" /><strong>{number(row.listings)}</strong> listing</span></span>
             </div>
             <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-default" role="presentation">

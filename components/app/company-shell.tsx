@@ -147,7 +147,7 @@ export function CompanyShell({ route, navigate, children }: { route: string; nav
 
       <header className="company-navbar">
         <button type="button" className="company-mobile-logo" onClick={() => go('beranda')} aria-label="Ke Beranda">
-          <Image src="/brand-auto-audit.png" alt="AutoAudit" width={143} height={59} unoptimized />
+          <Image src="/brand-agent-developer.png" alt="AutoAudit · Agent Developer" width={697} height={362} unoptimized />
         </button>
         <div className={cn('company-navbar-heading', pageHeading?.onBack && 'has-back')}>
           {pageHeading?.onBack && <button type="button" className="company-navbar-back" aria-label={`Kembali dari ${pageHeading.title}`} onClick={pageHeading.onBack}><ArrowLeft size={20} aria-hidden="true" /></button>}

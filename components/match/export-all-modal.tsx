@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Modal, ProgressBar, toast, type useOverlayState } from '@heroui/react';
 import { CircleCheck, Download, FileText, Sparkles } from 'lucide-react';
-import { EmptyState, ErrorNotice, LoadingRows } from '@/components/app/primitives';
+import { EmptyState, ErrorNotice, LoadingIndicator, LoadingRows } from '@/components/app/primitives';
 import { BlurFade } from '@/components/magicui/blur-fade';
 import { errorMessage } from '@/lib/api';
 import { number, prettyRange, todayWib } from '@/lib/format';
@@ -40,7 +40,7 @@ function duration(seconds: number) {
 }
 
 /** Confirm output format, then export with real progress per sales. */
-export function ExportAllModal({ state, direction, filters }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, unknown> }) {
+export function ExportAllModal({ state, direction, filters, minimalLoading = false }: { state: ReturnType<typeof useOverlayState>; direction: Direction; filters: Record<string, unknown>; minimalLoading?: boolean }) {
   const [locked, setLocked] = useState(false);
   return (
     <Modal.Backdrop isOpen={state.isOpen} isDismissable={!locked} isKeyboardDismissDisabled={locked} onOpenChange={(open) => { if (open || !locked) state.setOpen(open); }}>
@@ -149,7 +149,7 @@ function Body({ direction, filters, onLock, onClose }: { direction: Direction; f
       <Modal.Header><Modal.Heading>{stage === 'done' ? 'Export selesai' : working ? 'Sedang membuat PDF…' : filters.recent ? 'Export Match Terbaru ke PDF' : 'Export semua pencocokan ke PDF'}</Modal.Heading></Modal.Header>
       <Modal.Body className="space-y-4">
         <ErrorNotice message={plan.error} onRetry={plan.reload} />
-        {plan.loading && !data && <LoadingRows rows={3} />}
+        {plan.loading && !data && (minimalLoading ? <LoadingIndicator minimal /> : <LoadingRows rows={3} />)}
         {data && data.groups.length === 0 && <EmptyState compact animation="empty-box" title="Tidak ada pencocokan untuk filter ini" description="Ubah tanggal atau aktifkan Hot, Warm, atau Belum cocok, lalu coba lagi." />}
 
         {data && data.groups.length > 0 && (stage === 'confirm' || stage === 'failed') && (
