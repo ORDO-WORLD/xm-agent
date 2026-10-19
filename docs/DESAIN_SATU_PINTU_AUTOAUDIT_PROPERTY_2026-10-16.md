@@ -2,6 +2,8 @@
 
 Tanggal: 16 Oktober 2026, Asia/Jakarta. Status: **desain disetujui; implementasi kode lokal selesai, cutover belum dijalankan**.
 
+**Koreksi produk disetujui 16 Oktober 2026:** pengaturan operasional Property kembali diedit langsung di XM, dan halaman Perusahaan mempertahankan kartu/search/detail/statistik serta Login As. Akun/password, identitas Company dan Team Access tetap AutoAudit. Native setting memakai sesi SSO tervalidasi + Origin XM + izin existing; audit tetap melalui outbox yang sama. Catatan target “pengaturan hanya di AA” di bawah merekam rancangan awal dan digantikan koreksi ini; kontrak aktual ada di panduan Property AutoAudit.
+
 Dokumen pasangan: [rencana implementasi](RENCANA_IMPLEMENTASI_SATU_PINTU_AUTOAUDIT_PROPERTY_2026-10-16.md).
 Repo AA = `../../sales-audit-2/`; repo XM = `../` dari direktori dokumen ini.
 Keputusan produk berasal dari diskusi pengguna; implementasi diizinkan melalui pesan “oke si nice, implement it”. Panduan perilaku aktual: [Property AutoAudit](../../sales-audit-2/agent-docs/domains/property/README.md).

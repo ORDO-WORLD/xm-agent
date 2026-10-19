@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { Button, Input, Label, Switch, TextArea, TextField, toast } from '@heroui/react';
+import { Button, Label, Switch, TextArea, TextField, toast } from '@heroui/react';
 import { Building2, ChevronDown, Info, LoaderCircle, LockKeyhole, RotateCcw, Save, Search, UsersRound, Workflow, type LucideIcon } from 'lucide-react';
 import { errorMessage } from '@/lib/api';
 import { useSectionSearchLabel } from '@/lib/section-search';
-import { useCompany } from '@/lib/session';
+import { useCompany, useSession } from '@/lib/session';
 import type { GroupBy, MatchingMode } from '@/lib/types';
 import { useApi } from '@/lib/workspace-context';
 
@@ -39,9 +39,8 @@ function GeneralSection({ title, description, icon: Icon, children }: { title: s
 export function GeneralTab() {
   const api = useApi();
   const { company, refresh } = useCompany();
+  const { user } = useSession();
   const admin = !!company?.permissions.manage_settings;
-  const [edited, setEdited] = useState<string | null>(null);
-  const name = edited ?? company?.company_name ?? '';
   const [state, setState] = useState<SearchState | null>(null);
   const [text, setText] = useState('');
   const [locked, setLocked] = useState(false);
@@ -87,13 +86,10 @@ export function GeneralTab() {
 
   return (
     <div className="general-settings">
-      <GeneralSection icon={Building2} title="Nama company" description="Nama perusahaan yang ditampilkan di aplikasi.">
+      <GeneralSection icon={Building2} title="Nama company" description="Nama perusahaan mengikuti AutoAudit.">
         <div className="flex items-center gap-2">
-          <TextField aria-label="Nama company" value={name} onChange={setEdited} isDisabled={!admin || !!busy} fullWidth className="min-w-0 flex-1">
-            <Input maxLength={120} />
-          </TextField>
-          {admin && <Button className="shrink-0" isPending={busy === 'name'} isDisabled={!!busy || !name.trim() || name.trim() === company?.company_name}
-            onPress={() => void run('name', async () => { await api.put('/company/settings', { company_name: name.trim() }); setEdited(null); }, 'Nama company disimpan')}><Save className="size-4" aria-hidden="true" />Simpan</Button>}
+          <p className="min-w-0 flex-1">{company?.company_name || '—'}</p>
+          {admin && <a className="text-accent underline" href={`${user.autoaudit_url || ''}${user.role === 'admin' ? '/dashboard/companies' : '/dashboard/profile-company'}`}>Kelola di AutoAudit</a>}
         </div>
       </GeneralSection>
 

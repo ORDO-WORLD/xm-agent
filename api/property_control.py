@@ -1,4 +1,4 @@
-"""AutoAudit controls configuration, through per-request scoped tickets, never a browser role flag."""
+"""Scoped AutoAudit control tickets and native XM settings with a validated SSO session."""
 import hashlib
 import hmac
 import re
@@ -29,7 +29,21 @@ def setting_path(path):
 
 
 def needs_control(method, path):
-    return (method not in ('GET', 'HEAD', 'OPTIONS') and setting_path(path)) or path.startswith(('/integration/keys', '/property-control/'))
+    return path.startswith('/property-control/')
+
+
+def browser_context(request, as_admin=False):
+    """Reuse the actor freshly validated by current_user; never accept browser actor IDs."""
+    origin = request.headers.get('origin')
+    host = request.headers.get('x-forwarded-host', request.headers.get('host', '')).split(',')[0].strip()
+    scheme = request.headers.get('x-forwarded-proto', request.url.scheme).split(',')[0].strip()
+    if origin != f'{scheme}://{host}':
+        raise HTTPException(403, 'Perubahan pengaturan harus berasal dari halaman XM.')
+    actor = getattr(request.state, 'property_actor', None)
+    if not actor:
+        raise HTTPException(401, 'Sesi AutoAudit diperlukan.')
+    return {'actor': actor, 'companyId': actor.get('companyId'), 'eventId': str(uuid.uuid4()),
+            'auditEligible': bool(getattr(request.state, 'property_audit_eligible', False)) and not as_admin}
 
 
 async def resolve(request):

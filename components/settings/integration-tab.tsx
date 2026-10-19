@@ -39,7 +39,8 @@ export function IntegrationTab() {
 
 function IntegrationSettings({ companyName }: { companyName: string }) {
   const api = useApi();
-  const keys = useData((signal) => api.get<{ keys: IntegrationKey[] }>('/integration/keys', signal), []);
+  const keys = useData((signal) => api.get<{ keys: IntegrationKey[]; has_more?: boolean }>('/integration/keys', signal), []);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [name, setName] = useState('Workflow Builder');
   // Secrets remain in memory only. Closing the modal must not acknowledge or discard them.
   const [pendingTokens, setPendingTokens] = useState<Record<string, string>>({});
@@ -71,6 +72,14 @@ function IntegrationSettings({ companyName }: { companyName: string }) {
   const setPage = (next: number) => setPaging({ query, page: next });
   const discardSecret = (id: string) => setPendingTokens((current) => { const next = { ...current }; delete next[id]; return next; });
 
+  async function loadMore() {
+    setLoadingMore(true);
+    try {
+      const next = await api.get<{ keys: IntegrationKey[]; has_more: boolean }>(`/integration/keys?offset=${all.length}`);
+      keys.setData((current) => ({ ...next, keys: [...(current?.keys ?? []), ...next.keys.filter((item) => !current?.keys.some((old) => old.id === item.id))] }));
+    } catch (reason) { toast.danger(errorMessage(reason)); } finally { setLoadingMore(false); }
+  }
+
   function openEditor(key?: IntegrationKey) {
     setEditingId(key?.id ?? null); setName(key?.name ?? 'Workflow Builder'); setVisible(false); setError(''); editor.open();
   }
@@ -84,7 +93,7 @@ function IntegrationSettings({ companyName }: { companyName: string }) {
     try {
       const created = await api.post<NewKey>('/integration/keys', { name: name.trim() });
       setPendingTokens((current) => ({ ...current, [created.id]: created.token }));
-      keys.setData((current) => ({ keys: [{ id: created.id, name: created.name, created_at: created.created_at, saved_at: created.saved_at, last_used_at: null, revoked_at: null }, ...(current?.keys ?? [])] }));
+      keys.setData((current) => ({ ...current, keys: [{ id: created.id, name: created.name, created_at: created.created_at, saved_at: created.saved_at, last_used_at: null, revoked_at: null }, ...(current?.keys ?? [])] }));
       setEditingId(created.id); setName(created.name); setVisible(false); setPage(1);
       toast.success('Token integrasi dibuat');
     } catch (reason) { const message = errorMessage(reason); setError(message); toast.danger(message); }
@@ -132,6 +141,7 @@ function IntegrationSettings({ companyName }: { companyName: string }) {
         {mobile ? <div className="sales-cards">{rows.map((item, index) => <TokenRow key={item.id} item={item} number={start + index + 1} mobile onEdit={openEditor} onRevoke={askRevoke} />)}{!rows.length && <p className="p-4 text-sm">Nama koneksi tidak ditemukan.</p>}</div> : <div className="sales-table-wrap"><table className="sales-table"><thead><tr><th>No</th><th>Nama koneksi</th><th>Status penyimpanan</th><th>Dibuat</th><th>Terakhir dipakai</th><th className="text-center">Aksi</th></tr></thead><tbody>{rows.map((item, index) => <TokenRow key={item.id} item={item} number={start + index + 1} mobile={false} onEdit={openEditor} onRevoke={askRevoke} />)}{!rows.length && <tr><td colSpan={6}>Nama koneksi tidak ditemukan.</td></tr>}</tbody></table></div>}
         <SettingsPagination page={page} pageSize={pageSize} total={filtered.length} label="token" onPage={setPage} onPageSize={(size) => { setPageSize(size); setPage(1); }} />
       </>}
+      {keys.data?.has_more && <Button variant="secondary" isPending={loadingMore} isDisabled={keys.loading || busy} onPress={() => void loadMore()}>Muat token berikutnya</Button>}
     </section>
 
     <Modal.Backdrop isOpen={guide.isOpen} onOpenChange={(open) => guide.setOpen(open)}>

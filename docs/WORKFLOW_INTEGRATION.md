@@ -15,7 +15,7 @@ Di web/nginx, semua alamat API memakai prefix `/api`. Jika mengakses FastAPI
 langsung (port 8000), hilangkan prefix `/api`. Gunakan satu base URL agar
 `download_url` relatif dari manifest dapat diselesaikan ke host yang sama.
 
-Company/Superadmin membuat token di **AutoAudit → Pengaturan Property → Integrasi workflow**. Browser memanggil proxy AA; cookie XM langsung tidak lagi berwenang mengelola key:
+Company/Superadmin membuat token langsung di **XM → Pengaturan → Integrasi workflow** dengan sesi SSO yang divalidasi AutoAudit dan Origin XM. Pilihan **AutoAudit → Pengaturan Property → Integrasi workflow** juga tetap tersedia melalui proxy AA:
 
 ```http
 POST /api/property/settings/keys?company_id=<id-company>
@@ -26,7 +26,7 @@ Origin: https://<origin-autoaudit>
 {"name":"Workflow Builder"}
 ```
 
-AA meneruskan request ke `/api/integration/keys` XM memakai tiket server-only `property-control` yang mengikat actor/Company/method/path/body. Key workflow tetap hanya untuk export routes. Daftar key di proxy AA memakai `offset`, 50 row/halaman dan `has_more`; secret tampil sekali. Rename/konfirmasi/revoke melalui AA. Kontrak job export di bawah tetap pada API Property.
+AA meneruskan request ke `/api/integration/keys` XM memakai tiket server-only `property-control` yang mengikat actor/Company/method/path/body. Native XM memakai cookie SSO dan role Company/Superadmin; key workflow tetap hanya untuk export routes. Daftar key memakai `offset`, 50 row/halaman dan `has_more`; XM menyediakan muat token berikutnya dan pagination render. Secret tampil sekali. Rename/konfirmasi/revoke tersedia langsung di XM maupun melalui AA. Kontrak job export di bawah tetap pada API Property.
 
 Respons `201` berisi `id`, `token`, `scope: "property:export"`, `company_id`,
 `name`, dan `created_at`. Simpan `token` di penyimpanan kredensial workflow.

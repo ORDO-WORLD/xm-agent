@@ -61,7 +61,7 @@ Login hanya melalui AutoAudit. Password lokal ditolak dan startup tidak membuat 
 Tiga peran:
 
 - **Administrator platform** (`admin`): principal Superadmin AA, dapat membuka workspace Company; Company/akun dikelola di AA.
-- **Pengelola Company** (`company_admin`): satu principal akun Company AA; upload operasional di XM, pengaturan dan kunci anggota melalui AA. Tidak ada promosi Team Access menjadi admin tambahan.
+- **Pengelola Company** (`company_admin`): satu principal akun Company AA; upload dan pengaturan Property langsung di XM, kunci anggota melalui AA. Tidak ada promosi Team Access menjadi admin tambahan.
 - **Anggota** (`user`): mencocokkan, menandai status, mengunduh PDF, dan melihat Beranda, Match Terbaru, serta Stok Sales.
 
 Akun terkunci menampilkan layar kosong dengan latar blur dan tautan WhatsApp admin. Hak akses ditegakkan di server pada setiap permintaan.
@@ -72,7 +72,8 @@ Wajib `XM_SSO_ENABLED=1` dan `AUTOAUDIT_BASE_URL`. AA memakai `PROPERTY_PUBLIC_B
 
 - **Principal:** Company aktif dengan modul Property menjadi `company:<id>` / `company_admin`; Team Access non-CS dengan izin Agent Developer menjadi `superior:<id>` / `user`; Superadmin mengikuti akses existing. Anggota berbagi workspace Company; scope Sales/divisi AA tidak menjadi filter baru Property.
 - **Workspace:** mapping Company existing dipakai kembali; hanya Company belum terhubung mendapat `aa-<id>`. Tidak mencocokkan identitas dari email/nama atau menghapus arsip lokal otomatis.
-- **Pengaturan:** hanya melalui AA, termasuk keyword pribadi, matching, glossary/lokasi, watchlist, sumber dan workflow key. Backend XM membutuhkan tiket control AA; cookie XM dan workflow key tidak cukup. Akun/password/Company lokal tidak dapat diedit.
+- **Pengaturan:** halaman XM `/#/pengaturan` menyediakan Umum, Pencocokan, Pantau Sales, Akun saya, dan Integrasi workflow. Edit memakai sesi SSO XM yang divalidasi AA, Origin XM, serta izin Company/anggota existing. Nama Company, akun/password dan Team Access dikelola di AA. Sumber data dan kontrol tambahan tetap tersedia melalui AA dengan tiket `property-control`; workflow key hanya berwenang untuk export.
+- **Perusahaan / Login As:** Superadmin memakai kartu, pencarian, pagination, statistik, detail akun dan aktivitas di XM. Tombol Login As membuka workspace Company melalui owner UUID existing; aktor tetap Superadmin, bukan sesi/password Company baru. Create/rename Company dan CRUD akun diarahkan ke AA.
 - **Sesi:** maksimal 15 menit; validasi AA sekali/request di luar connection DB. Reload browser membaca akun AA aktif; actor sama memperbarui sesi dan return hash aman, actor berbeda mendapat konteks baru. Poll auth lima detik/focus tab dihapus; lock/revoke terlihat pada request berikutnya. `401` memulai SSO; `403/503` tidak membuat loop. Gangguan AA tidak menghapus sesi. Logout cookie AA saja belum mencabut salinan tiket root/Company selama maksimal 15 menit.
 - **Logout:** tutup XM → signed-out → logout AA → login AA. Penanda Property memungkinkan pilihan AutoAudit/Agent Developer sesudah login yang berhak; default AutoAudit tiga detik.
 - **Saat modul dimatikan** data company tetap tersimpan dan sambungan sales tetap menarik chat.
@@ -93,7 +94,7 @@ Penarikan dataset tetap read-only dan tidak memicu sinkronisasi WhatsApp. POST v
 
 ## Log aktivitas
 
-Perubahan pengaturan dari AA disimpan atomik dengan outbox XM. Worker mengirim maksimal 50 event/60 detik dengan budget jaringan sekitar lima detik; ack baru mengubah sent. AA memakai receipt UUID + PR0001 atomik. Company/Superior tercatat, Superadmin/Login As tidak menjadi company activity. Log pengaturan/receipt tanpa batas umur sesuai keputusan 16 Oktober 2026; view tetap 90 hari, PDF integration tujuh hari. Relay tidak membawa raw key/tiket/isi chat.
+Perubahan pengaturan dari XM maupun AA disimpan atomik dengan outbox XM. Untuk edit native XM, actor dan `auditEligible` diambil dari jawaban validasi sesi AA; tidak ada validasi AA tambahan per mutasi. Worker mengirim maksimal 50 event/60 detik dengan budget jaringan sekitar lima detik; ack baru mengubah sent. AA memakai receipt UUID + PR0001 atomik. Company/Superior tercatat, Superadmin/Login As tidak menjadi company activity. Log pengaturan/receipt tanpa batas umur sesuai keputusan 16 Oktober 2026; view tetap 90 hari, PDF integration tujuh hari. Relay tidak membawa raw key/tiket/isi chat.
 
 Menu **Aktivitas** (hanya administrator platform) menampilkan siapa melakukan apa di semua company, dalam kalimat biasa. Company tidak dapat melihatnya dengan cara apa pun. Rancangannya ada di [docs/DESAIN_ACTIVITY_LOG_2026-10-09.md](docs/DESAIN_ACTIVITY_LOG_2026-10-09.md).
 
@@ -126,7 +127,9 @@ Superadmin membuka workspace dari daftar Company XM; create/rename/account manag
 
 Admin requests carry a selected user ID, checked against the authenticated role on the server. Each request and worker job gets its own workspace context. PostgreSQL queries, uploaded-file directories, Qdrant searches/payloads, result caches, calendar counts, exports, and maintenance jobs are scoped to that workspace. A normal user cannot switch owner by changing a request header or submitting another account's document ID. The selected workspace stays local to the browser view, so admin tabs can manage different users independently.
 
-Arsip existing dipertahankan; mapping AA terhubung tidak dipindah namespace otomatis. Upload JSON operasional di XM, setting/lokasi melalui AA. Sebelum cutover, review mapping/conflict dan izin DB/migration. `ensure_schema` berjalan saat startup API/worker; jangan memulai server untuk menguji schema tanpa izin DB.
+Arsip existing dipertahankan; mapping AA terhubung tidak dipindah namespace otomatis. Upload dan pengaturan Property tersedia langsung di XM sesuai izin existing; akun/Company tetap AA. Sebelum cutover, review mapping/conflict dan izin DB/migration. `ensure_schema` berjalan saat startup API/worker; jangan memulai server untuk menguji schema tanpa izin DB.
+
+Startup API dan worker membandingkan hash `schema.sql` + `MIGRATION_VERSION` (`api/db.py`) dengan satu baris `xm.bootstrap_state` (`id=1`). Bila sama, startup langsung lanjut tanpa DDL maupun backfill `migrate_v4`. Bila beda (schema berubah atau versi dinaikkan), startup memakai advisory lock sesi yang sama, menjalankan `schema.sql` lalu `migrate_v4`, kemudian menimpa hash; proses kedua menunggu lalu melewati. Naikkan `MIGRATION_VERSION` bila logika backfill berubah tanpa mengubah `schema.sql`. Hanya penerapan itu yang masih dapat tertunda oleh query baca panjang; periksa melalui `pg_stat_activity`/`pg_blocking_pids`, bukan dengan menjalankan beberapa API tambahan. Koneksi XM memakai `client_connection_check_interval=5s`, sehingga query yang kliennya sudah putus (restart/Ctrl+C) dibatalkan dan tidak menahan lock.
 
 Kontrak aktif: [Property satu pintu](../sales-audit-2/agent-docs/domains/property/README.md). [Desain](docs/DESAIN_SATU_PINTU_AUTOAUDIT_PROPERTY_2026-10-16.md), [rencana](docs/RENCANA_IMPLEMENTASI_SATU_PINTU_AUTOAUDIT_PROPERTY_2026-10-16.md). Focused local checks bukan bukti DB, browser, atau deployment. Fixture DB lama berbasis password perlu disesuaikan ke SSO sebelum menguji cutover; jangan menjalankan full discover dengan env normal.
 

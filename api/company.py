@@ -72,9 +72,7 @@ class CompanyUpdate(BaseModel):
 def put_company_settings(payload: CompanyUpdate, request: Request):
     changes = payload.model_dump(exclude_none=True)
     if 'company_name' in changes:
-        changes['company_name'] = changes['company_name'].strip()
-        if not changes['company_name']:
-            raise HTTPException(400, 'Nama company wajib diisi.')
+        raise HTTPException(403, 'Nama Company dikelola melalui AutoAudit.')
     if changes:
         # Column names come from the fixed model above, never from the client.
         sets = ', '.join(f'{column} = %s' for column in changes)
