@@ -187,12 +187,36 @@ def reset_personal_search(request: Request):
         return search_state(conn, user['role'], key)
 
 
+class GlossaryEntry(BaseModel):
+    alias: str = Field(max_length=100)
+    canonical: str = Field(max_length=100)
+
+
+@router.post('/glossary', status_code=201)
+def add_glossary(payload: GlossaryEntry):
+    alias, canonical = payload.alias.strip().lower(), payload.canonical.strip().lower()
+    if not alias or not canonical:
+        raise HTTPException(400, 'Istilah dan nama baku wajib diisi.')
+    with connect() as conn:
+        # Serialize additions and full replacements within this company.
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042028))")
+        entries = glossary_values(conn)
+        if alias in entries:
+            raise HTTPException(409, 'Istilah sudah ada. Hubungi admin untuk mengubahnya.')
+        if len(entries) >= 500:
+            raise HTTPException(400, 'Glosarium maksimal 500 istilah.')
+        conn.execute('INSERT INTO xm.glossary(alias,canonical) VALUES(%s,%s)', (alias, canonical))
+        conn.commit()
+    return {'alias': alias, 'canonical': canonical}
+
+
 @router.put('/glossary')
 def save_glossary(payload: Glossary):
     entries = {k.strip().lower():v.strip().lower() for k,v in payload.entries.items()}
     if len(entries) > 500 or any(not k or not v or len(k)>100 or len(v)>100 for k,v in entries.items()):
         raise HTTPException(400, 'Istilah dan nama baku wajib diisi (maks. 100 karakter, 500 istilah).')
     with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_setting('xm.workspace_id'), 9042028))")
         conn.execute("DELETE FROM xm.glossary WHERE company_id=current_setting('xm.workspace_id')")
         for k,v in entries.items():
             conn.execute('INSERT INTO xm.glossary(alias,canonical) VALUES(%s,%s)',(k,v))

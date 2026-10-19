@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type SubmitEvent } from 'react';
 import { Button, Chip, Input, Label, Modal, TextField, toast, useOverlayState } from '@heroui/react';
 import { BookText, FileSpreadsheet, Percent, Plus, RefreshCw, Save, Scale, Trash2 } from 'lucide-react';
 import { LocationIndexPanel } from '@/components/settings/location-index-panel';
@@ -44,6 +44,10 @@ export function MatchingTab() {
   const admin = !!company?.permissions.manage_settings;
   const [settings, setSettings] = useState<Settings | null>(null);
   const [glossary, setGlossary] = useState<[string, string][]>([]);
+  const [newAlias, setNewAlias] = useState('');
+  const [newCanonical, setNewCanonical] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
   const [csv, setCsv] = useState<CsvPreview | null>(null);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -78,6 +82,19 @@ export function MatchingTab() {
   const total = settings ? WEIGHTS.reduce((sum, [key]) => sum + Number(settings[key]), 0) : 0;
   const balanced = Math.abs(total - 100) < 0.001;
   const set = (key: keyof Settings, value: number) => { setSettings((current) => (current ? { ...current, [key]: value } : current)); setDirty(true); };
+
+  async function addEntry(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (adding) return;
+    setAdding(true); setAddError('');
+    try {
+      const saved = await api.post<{ alias: string; canonical: string }>('/glossary', { alias: newAlias, canonical: newCanonical });
+      setGlossary((current) => [...current, [saved.alias, saved.canonical]]);
+      setNewAlias(''); setNewCanonical('');
+      toast.success('Istilah tersimpan', { description: 'Berlaku untuk pesan baru. Hubungi admin untuk memproses ulang data lama.' });
+    } catch (reason) { setAddError(errorMessage(reason, 'Istilah gagal disimpan.')); }
+    finally { setAdding(false); }
+  }
 
   async function chooseCsv(chosen?: File) {
     if (!chosen) return;
@@ -120,7 +137,7 @@ export function MatchingTab() {
   if (!settings) return <p className="text-base text-muted">{error || 'Memuat pengaturan…'}</p>;
   return (
     <div className="space-y-5">
-      {!admin && <Notice status="accent">Anda dapat melihat pengaturan ini, tetapi hanya super admin yang dapat mengubahnya.</Notice>}
+      {!admin && <Notice status="accent">Anda dapat menambahkan istilah glosarium satu per satu. Pengaturan lainnya hanya dapat diubah oleh admin.</Notice>}
       {processing && <Notice status="accent" title="Pencocokan sedang dihitung ulang"><RefreshCw className="mr-1.5 inline size-4 animate-spin" aria-hidden="true" />{job?.status === 'queued' ? 'Menunggu antrean' : 'Memproses seluruh data'} — Anda boleh berpindah halaman.</Notice>}
       {job?.status === 'failed' && <Notice status="danger" title="Proses ulang gagal">{job.error}</Notice>}
 
@@ -148,6 +165,20 @@ export function MatchingTab() {
       <Panel title={<span className="flex items-center gap-2"><BookText className="size-5 text-accent" aria-hidden="true" />Glosarium</span>}
         description="Kolom kiri adalah penulisan di chat, kolom kanan nama bakunya. Contoh: “rgcy” → “regency”."
         action={admin ? <><input ref={file} type="file" accept=".csv,text/csv" className="sr-only" aria-label="Pilih file CSV glosarium" onChange={(event) => void chooseCsv(event.target.files?.[0])} /><Button variant="secondary" isDisabled={processing} onPress={() => file.current?.click()}><FileSpreadsheet className="size-4" aria-hidden="true" />Unggah CSV</Button></> : undefined}>
+        <form onSubmit={addEntry} className="mb-4 space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <TextField value={newAlias} onChange={setNewAlias} isRequired isDisabled={adding} fullWidth>
+              <Label>Istilah di chat</Label><Input maxLength={100} placeholder="Contoh: rgcy" />
+            </TextField>
+            <TextField value={newCanonical} onChange={setNewCanonical} isRequired isDisabled={adding} fullWidth>
+              <Label>Nama baku</Label><Input maxLength={100} placeholder="Contoh: regency" />
+            </TextField>
+          </div>
+          <Button type="submit" variant="secondary" isPending={adding} isDisabled={!newAlias.trim() || !newCanonical.trim() || busy || dirty || processing}><Plus className="size-4" aria-hidden="true" />Simpan istilah baru</Button>
+          {dirty && <p className="text-sm text-muted">Simpan perubahan pengaturan sebelum menambahkan istilah baru.</p>}
+          {addError && <Notice status="danger">{addError}</Notice>}
+          <p className="text-sm text-muted">Istilah langsung tersimpan untuk company ini dan berlaku untuk pesan baru. Admin dapat memproses ulang data lama.</p>
+        </form>
         <div className="max-h-96 space-y-2 overflow-y-auto rounded-2xl bg-background p-2.5">
           {glossary.length === 0 && <p className="p-3 text-base text-muted">Belum ada istilah.</p>}
           {glossary.map(([alias, canonical], index) => (

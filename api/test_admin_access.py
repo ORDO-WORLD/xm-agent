@@ -37,7 +37,7 @@ class AccessPolicyTests(unittest.TestCase):
                           ('/stock/snapshot', 'POST'), ('/team/users', 'GET'), ('/team/users', 'POST'), ('/team/users/123', 'PUT')]
     PLATFORM_ONLY = [('/admin/companies', 'GET'), ('/admin/companies', 'POST'), ('/admin/companies/x', 'PUT'),
                      ('/admin/deploy', 'GET'), ('/admin/deploy', 'POST')]
-    MEMBER_OK = [('/settings', 'GET'), ('/search-default', 'GET'), ('/workspace', 'GET'), ('/workspace/groups', 'GET'),
+    MEMBER_OK = [('/glossary', 'POST'), ('/glossary', 'GET'), ('/settings', 'GET'), ('/search-default', 'GET'), ('/workspace', 'GET'), ('/workspace/groups', 'GET'),
                  ('/workspace/recommendations', 'POST'), ('/export/pdf', 'POST'), ('/preferences', 'PUT'),
                  ('/entities/status', 'POST'), ('/entities/lookup', 'GET'), ('/dashboard/overview', 'GET'),
                  ('/stock/overview', 'GET'), ('/stock/log', 'GET'), ('/matches/recent', 'GET'), ('/matches/recent/seen', 'POST'),
@@ -65,12 +65,13 @@ class AccessPolicyTests(unittest.TestCase):
     def test_locked_account_cannot_access_data_even_as_admin(self):
         for role in ('admin', 'company_admin', 'user'):
             user = person(role, locked=True)
-            for path, method in [('/stats', 'GET'), ('/settings', 'GET'), ('/workspace', 'GET'), ('/entities/status', 'POST'),
+            for path, method in [('/glossary', 'POST'), ('/stats', 'GET'), ('/settings', 'GET'), ('/workspace', 'GET'), ('/entities/status', 'POST'),
                                  ('/workspace/recommendations', 'POST'), ('/export/pdf', 'POST'), ('/team/users', 'GET')]:
                 self.assertEqual(self.check(user, path, method), 403)
             self.assertEqual(self.check(user, '/auth/me'), 204)
             self.assertEqual(self.check(user, '/auth/logout', 'POST'), 204)
         self.assertEqual(self.check(None, '/workspace'), 401)
+        self.assertEqual(self.check(None, '/glossary', 'POST'), 401)
 
     def test_company_admin_cannot_enter_another_account_workspace(self):
         from app import require_login
