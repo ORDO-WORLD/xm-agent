@@ -85,7 +85,7 @@ export function MatchingTab() {
 
   async function addEntry(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (adding) return;
+    if (adding || busy || dirty) return;
     setAdding(true); setAddError('');
     try {
       const saved = await api.post<{ alias: string; canonical: string }>('/glossary', { alias: newAlias, canonical: newCanonical });
@@ -114,7 +114,7 @@ export function MatchingTab() {
   }
 
   async function save() {
-    if (!settings) return;
+    if (!settings || adding) return;
     setError('');
     if (!balanced) { setError('Total bobot harus tepat 100%.'); return; }
     const entries: Record<string, string> = {};
@@ -174,10 +174,10 @@ export function MatchingTab() {
               <Label>Nama baku</Label><Input maxLength={100} placeholder="Contoh: regency" />
             </TextField>
           </div>
-          <Button type="submit" variant="secondary" isPending={adding} isDisabled={!newAlias.trim() || !newCanonical.trim() || busy || dirty || processing}><Plus className="size-4" aria-hidden="true" />Simpan istilah baru</Button>
+          <Button type="submit" variant="secondary" isPending={adding} isDisabled={!newAlias.trim() || !newCanonical.trim() || busy || dirty}><Plus className="size-4" aria-hidden="true" />Tambah &amp; simpan istilah</Button>
           {dirty && <p className="text-sm text-muted">Simpan perubahan pengaturan sebelum menambahkan istilah baru.</p>}
           {addError && <Notice status="danger">{addError}</Notice>}
-          <p className="text-sm text-muted">Istilah langsung tersimpan untuk company ini dan berlaku untuk pesan baru. Admin dapat memproses ulang data lama.</p>
+          <p className="text-sm text-muted">Istilah langsung tersimpan untuk company ini dan berlaku untuk pesan baru. Penambahan tetap tersedia saat proses ulang berjalan; istilah yang baru ditambahkan belum tentu masuk ke proses ulang yang sedang berjalan.</p>
         </form>
         <div className="max-h-96 space-y-2 overflow-y-auto rounded-2xl bg-background p-2.5">
           {glossary.length === 0 && <p className="p-3 text-base text-muted">Belum ada istilah.</p>}
@@ -192,13 +192,12 @@ export function MatchingTab() {
             </div>
           ))}
         </div>
-        {admin && <Button className="mt-3" variant="secondary" isDisabled={processing} onPress={() => { setGlossary([...glossary, ['', '']]); setDirty(true); }}><Plus className="size-4" aria-hidden="true" />Tambah istilah</Button>}
       </Panel>
 
       {error && <Notice status="danger">{error}</Notice>}
       {admin && (
         <div className={cn('pb-safe sticky bottom-20 z-10 rounded-2xl border border-border bg-surface/95 p-3 shadow-lg backdrop-blur lg:bottom-4', !dirty && 'hidden')}>
-          <Button size="lg" fullWidth isPending={busy} isDisabled={!dirty || processing || !balanced} onPress={save}><Save className="size-4" aria-hidden="true" />Simpan &amp; proses ulang pencocokan</Button>
+          <Button size="lg" fullWidth isPending={busy} isDisabled={!dirty || adding || processing || !balanced} onPress={save}><Save className="size-4" aria-hidden="true" />Simpan &amp; proses ulang pencocokan</Button>
           {!balanced && <p className="mt-2 text-center text-sm text-danger">Total bobot saat ini {total}%. Ubah hingga tepat 100%.</p>}
         </div>
       )}

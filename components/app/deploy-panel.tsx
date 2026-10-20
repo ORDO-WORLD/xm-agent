@@ -68,9 +68,10 @@ export function DeployPanel() {
   const state = STATE[data.status];
   return (
     <Panel title={<span className="flex items-center gap-2"><Rocket className="size-5 text-accent" aria-hidden="true" />Deploy aplikasi</span>}
-      description={data.commit ? <>Versi terpasang: <span className="font-mono">{data.commit.sha}</span> — {data.commit.subject} ({dateTime(data.commit.date)})</> : 'Ambil versi terbaru dari origin/main lalu pasang di server ini.'}
+      description={data.commit ? <>Versi checkout server: <span className="font-mono">{data.commit.sha}</span> — {data.commit.subject} ({dateTime(data.commit.date)})</> : 'Ambil versi terbaru dari origin/main lalu pasang di server ini.'}
       action={<Button size="lg" isPending={running || busy} isDisabled={running} onPress={() => setConfirm(true)}>{running ? 'Sedang deploy…' : 'Deploy sekarang'}</Button>}>
       <div className="space-y-3">
+        <p className="text-sm text-muted">Versi checkout menunjukkan commit pada folder server. Build aplikasi yang berjalan dapat berbeda jika deploy belum selesai atau gagal.</p>
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
           <Chip variant="soft" size="md" color={state.color}>{state.label}</Chip>
           {data.started_at && <span>Mulai {dateTime(data.started_at)}</span>}
