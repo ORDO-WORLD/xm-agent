@@ -16,7 +16,7 @@ export function AccountTab() {
       <div className="account-profile">
         <Avatar color="accent" className="size-20 text-2xl"><Avatar.Fallback>{initials(user.display_name)}</Avatar.Fallback></Avatar>
         <p className="mt-3 break-words text-xl font-medium"><SettingsLabel tab="akun">{user.display_name}</SettingsLabel></p>
-        <p className="mt-1 break-all text-base text-muted"><SettingsLabel tab="akun">{user.email}</SettingsLabel></p>
+        <p className="mt-1 break-all text-base text-muted"><SettingsLabel tab="akun">{user.email ?? '—'}</SettingsLabel></p>
       </div>
       <div className="account-controls">
         <SettingsSection tab="akun" icon={UserRound} title="Akun AutoAudit" description="Nama, password, dan akses akun dikelola melalui AutoAudit.">

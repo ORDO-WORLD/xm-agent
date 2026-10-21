@@ -9,7 +9,7 @@ export type ImportStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
 export type User = {
   id: string;
-  email: string;
+  email: string | null;
   display_name: string;
   role: Role;
   is_locked: boolean;
@@ -207,7 +207,7 @@ export type StockLogRow = {
 
 export type TeamMember = {
   id: string;
-  email: string;
+  email: string | null;
   display_name: string;
   role: Role;
   is_locked: boolean;
@@ -228,7 +228,7 @@ export type CompanySummary = {
   autoaudit_company_id: number | null;
   autoaudit_company_name: string | null;
   source: 'autoaudit' | 'xm';
-  users: { id: string; email: string; display_name: string; role: Role; is_locked: boolean; created_at: string; sso: boolean }[];
+  users: { id: string; email: string | null; display_name: string; role: Role; is_locked: boolean; created_at: string; sso: boolean }[];
 };
 
 export type DeployStatus = { enabled: false } | {

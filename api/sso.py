@@ -101,6 +101,7 @@ def provision_identity(conn, actor: dict, *, log_login=True):
     # Two first sign-ins of the same identity must not create two accounts.
     conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 13102026))', (key,))
     user = conn.execute('SELECT * FROM xm.users WHERE autoaudit_key=%s', (key,)).fetchone()
+    email = (actor.get('email') or '').strip().lower() or None
     if actor['role'] == 'company':
         company_id = actor['companyId']
         company_name = (actor.get('name') or '').strip() or f'Company #{company_id}'
@@ -111,7 +112,7 @@ def provision_identity(conn, actor: dict, *, log_login=True):
             user = conn.execute(
                 """INSERT INTO xm.users(id, email, display_name, password_hash, role, workspace_id, autoaudit_key)
                    VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *""",
-                (uuid.uuid4(), key.replace(':', '-') + '@sso.autoaudit.id', name, NO_PASSWORD, role, workspace, key)).fetchone()
+                (uuid.uuid4(), email, name, NO_PASSWORD, role, workspace, key)).fetchone()
         elif user['workspace_id'] != workspace:
             # Shared archives stay in their company. Personal search from the old company must not travel.
             conn.execute("UPDATE xm.user_preferences SET preferences=preferences - 'search_terms' WHERE user_id=%s", (user['id'],))
@@ -123,12 +124,12 @@ def provision_identity(conn, actor: dict, *, log_login=True):
             user = conn.execute(
                 """INSERT INTO xm.users(id, email, display_name, password_hash, role, autoaudit_key)
                    VALUES (%s, %s, %s, %s, 'admin', %s) RETURNING *""",
-                (uuid.uuid4(), key.replace(':', '-') + '@sso.autoaudit.id', name, NO_PASSWORD, key)).fetchone()
+                (uuid.uuid4(), email, name, NO_PASSWORD, key)).fetchone()
         # Platform administrators share the administrator archive instead of each owning an empty company.
         user['workspace_id'] = provision_workspace(conn, user['id'], legacy=True)
-    if user['display_name'] != name:
-        conn.execute('UPDATE xm.users SET display_name=%s WHERE id=%s', (name, user['id']))
-        user['display_name'] = name
+    if user['display_name'] != name or user['email'] != email:
+        conn.execute('UPDATE xm.users SET display_name=%s, email=%s WHERE id=%s', (name, email, user['id']))
+        user.update(display_name=name, email=email)
     if not log_login:
         return user
     # The session is renewed every 15 minutes; only a sign-in after a real pause is a new log line.

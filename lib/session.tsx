@@ -97,8 +97,8 @@ export function SessionProvider({ user, logout, children }: { user: User; logout
 
 const MANAGE_KEY = 'xm.manage';
 export type ManageTarget = { userId: string; name: string };
-type ManageValue = { target: ManageTarget | null; enter: (target: ManageTarget) => void; leave: () => void };
-const ManageContext = createContext<ManageValue>({ target: null, enter: () => {}, leave: () => {} });
+type ManageValue = { target: ManageTarget | null; enter: (target: ManageTarget, options?: { stay?: boolean }) => void };
+const ManageContext = createContext<ManageValue>({ target: null, enter: () => {} });
 export const useManage = () => useContext(ManageContext);
 
 /** Remembers which company the platform admin is working in, per browser tab. */
@@ -112,17 +112,13 @@ export function ManageProvider({ user, children }: { user: User; children: React
     } catch { return null; }
   });
 
-  const enter = useCallback((next: ManageTarget) => {
+  // The header picker keeps the current page; Login As opens the company at Beranda.
+  const enter = useCallback((next: ManageTarget, options?: { stay?: boolean }) => {
     try { window.sessionStorage.setItem(MANAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
     setTarget(next);
-    window.location.hash = '/beranda';
+    if (!options?.stay) window.location.hash = '/beranda';
   }, []);
-  const leave = useCallback(() => {
-    try { window.sessionStorage.removeItem(MANAGE_KEY); } catch { /* ignore */ }
-    setTarget(null);
-    window.location.hash = '/perusahaan';
-  }, []);
-  const value = useMemo(() => ({ target, enter, leave }), [target, enter, leave]);
+  const value = useMemo(() => ({ target, enter }), [target, enter]);
   return (
     <ManageContext.Provider value={value}>
       {/* Remount everything when the company changes so no data of the old one lingers. */}

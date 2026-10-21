@@ -4,10 +4,15 @@ import { createContext, useContext, useEffect, useState, type Dispatch, type Rea
 import { AlertDialog, Avatar, Button, Drawer, Dropdown, Label, useOverlayState } from '@heroui/react';
 import Image from 'next/image';
 import { ArrowLeft, Boxes, Building2, ChevronDown, ChevronsLeft, ChevronsRight, House, LayoutDashboard, LogOut, Menu, Search, ScrollText, Settings, Sparkles, UploadCloud, Users, Workflow, X } from 'lucide-react';
+import { CompanyPicker } from '@/components/app/company-picker';
+import { EmptyState } from '@/components/app/primitives';
 import { initials } from '@/lib/format';
 import type { Navigate } from '@/lib/router';
 import { useCompany, useManage, useSession } from '@/lib/session';
+import type { CompanySummary } from '@/lib/types';
+import { useData } from '@/lib/use-data';
 import { cn } from '@/lib/utils';
+import { useApi } from '@/lib/workspace-context';
 
 const MAIN = [
   { id: 'beranda', label: 'Beranda', icon: LayoutDashboard },
@@ -58,7 +63,10 @@ export function CompanyLogoutDialog({ state, onConfirm }: { state: ReturnType<ty
 export function CompanyShell({ route, navigate, children }: { route: string; navigate: Navigate; children: ReactNode }) {
   const { user, logout } = useSession();
   const { company, unseen } = useCompany();
-  const { target, leave } = useManage();
+  const { target } = useManage();
+  const api = useApi();
+  const isAdmin = user.role === 'admin';
+  const companies = useData((signal) => api.get<CompanySummary[]>('/admin/companies', signal), [], isAdmin);
   const [pageHeading, setPageHeading] = useState<PageHeading>(null);
   const menu = useOverlayState();
   const confirmLogout = useOverlayState();
@@ -80,6 +88,10 @@ export function CompanyShell({ route, navigate, children }: { route: string; nav
     { id: 'perusahaan', label: target ? 'Semua perusahaan' : 'Perusahaan', icon: Building2 },
     { id: 'aktivitas', label: 'Aktivitas', icon: ScrollText },
   ] : [];
+  // Company pages need a chosen company first; Perusahaan and Aktivitas stay across all companies.
+  const platformPage = platform.some((item) => item.id === route);
+  const needsCompany = isAdmin && !target && !platformPage;
+  const picker = (className: string) => isAdmin && <CompanyPicker companies={companies.data} stay={!platformPage} className={className} />;
   const title = route === 'perusahaan' ? 'Perusahaan' : [...MAIN, ...MANAGE, ...platform].find((item) => item.id === route)?.label ?? 'Beranda';
   useEffect(() => {
     const previousTitle = document.title;
@@ -154,6 +166,7 @@ export function CompanyShell({ route, navigate, children }: { route: string; nav
           {pageHeading?.onBack && <button type="button" className="company-navbar-back" aria-label={`Kembali dari ${pageHeading.title}`} onClick={pageHeading.onBack}><ArrowLeft size={20} aria-hidden="true" /></button>}
           <h1 className="company-navbar-title">{pageHeading?.title ?? title}</h1>
         </div>
+        {picker('company-picker-nav')}
         <div className="company-desktop-profile"><Dropdown isOpen={profileMenu.isOpen} onOpenChange={(open) => profileMenu.setOpen(open)}>
           <Dropdown.Trigger className="company-profile-trigger" aria-label="Buka menu profil">
             <Avatar size="sm" className="company-profile-avatar" style={{ backgroundColor: avatarColor, color: '#fff' }}><Avatar.Fallback>{initials(user.display_name)}</Avatar.Fallback></Avatar>
@@ -178,9 +191,9 @@ export function CompanyShell({ route, navigate, children }: { route: string; nav
         <div className="company-mobile-page-heading">
           {pageHeading?.onBack && <button type="button" className="company-navbar-back" aria-label={`Kembali dari ${pageHeading.title}`} onClick={pageHeading.onBack}><ArrowLeft size={20} aria-hidden="true" /></button>}
           <h1>{pageHeading?.title ?? title}</h1>
+          {picker('company-picker-page')}
         </div>
-        {user.role === 'admin' && target && <section className="company-managing-banner" aria-label="Company yang sedang dikelola"><p className="flex min-w-0 items-center gap-2"><Building2 className="size-4 shrink-0" aria-hidden="true" /><span className="truncate">Mengelola: <span className="font-medium">{target.name}</span></span></p><Button variant="secondary" size="sm" className="shrink-0" onPress={leave}>Semua perusahaan</Button></section>}
-        {children}
+        {needsCompany ? <EmptyState title="Pilih company dulu" description="Pilih company di kolom Company untuk membuka data halaman ini." /> : children}
       </div></main>
 
       <Drawer.Backdrop isOpen={menu.isOpen} onOpenChange={(open) => menu.setOpen(open)} className="company-mobile-backdrop">

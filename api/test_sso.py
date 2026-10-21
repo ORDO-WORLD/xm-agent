@@ -102,9 +102,9 @@ class SsoServerCase(ServerTestCase):
     def remove_sso_accounts(self):
         from db import connect
         with connect() as conn:
-            conn.execute("DELETE FROM xm.activity_log WHERE actor_email LIKE %s", ('%@sso.autoaudit.id',))
-            conn.execute('DELETE FROM xm.users WHERE autoaudit_key IN (%s, %s)',
-                         (f'company:{self.company_id}', f'superadmin:{self.child_id}'))
+            keys = (f'company:{self.company_id}', f'superadmin:{self.child_id}')
+            conn.execute('DELETE FROM xm.activity_log WHERE actor_id IN (SELECT id FROM xm.users WHERE autoaudit_key IN (%s, %s))', keys)
+            conn.execute('DELETE FROM xm.users WHERE autoaudit_key IN (%s, %s)', keys)
             conn.commit()
 
     def sql(self, statement, params=()):
@@ -126,8 +126,8 @@ class SsoServerCase(ServerTestCase):
         with response:
             return response.status, response.headers, response.read()
 
-    def company_actor(self, name='PT Contoh'):
-        return {'role': 'company', 'companyId': self.company_id, 'name': name, 'actorType': 'company', 'actorId': self.company_id}
+    def company_actor(self, name='PT Contoh', email='PT@Contoh.id'):
+        return {'role': 'company', 'companyId': self.company_id, 'name': name, 'actorType': 'company', 'actorId': self.company_id, 'email': email}
 
     def ticket_answer(self, actor, state, age_ms=0):
         now = int(time.time() * 1000)
@@ -154,7 +154,7 @@ class SsoCallbackTests(SsoServerCase):
         cookie = self.sign_in(self.company_actor())
         key, workspace = f'company:{self.company_id}', f'aa-{self.company_id}'
         user, = self.users(key)
-        self.assertEqual((user['role'], user['workspace_id']), ('company_admin', workspace))
+        self.assertEqual((user['role'], user['workspace_id'], user['email']), ('company_admin', workspace, 'pt@contoh.id'))
         prefs, = self.sql('SELECT * FROM xm.app_preferences WHERE company_id=%s', (workspace,))
         self.assertEqual((prefs['autoaudit_company_id'], prefs['company_name']), (self.company_id, 'PT Contoh'))
 
@@ -164,8 +164,8 @@ class SsoCallbackTests(SsoServerCase):
         self.assertNotIn('sso_ticket', me)
         self.assertNotIn('autoaudit_key', me)
 
-        self.sign_in(self.company_actor())
-        self.assertEqual(len(self.users(key)), 1)
+        self.sign_in(self.company_actor(email='baru@contoh.id'))
+        self.assertEqual([row['email'] for row in self.users(key)], ['baru@contoh.id'], 'the AutoAudit email follows the account')
         logins = self.sql("SELECT repeat_count FROM xm.activity_log WHERE action='auth.sso_login' AND actor_id=%s", (user['id'],))
         self.assertEqual(len(logins), 1, 'renewing the session is not a new log line')
 
@@ -173,7 +173,7 @@ class SsoCallbackTests(SsoServerCase):
         actor = {'role': 'superadmin', 'companyId': None, 'actorType': 'child_superadmin', 'actorId': self.child_id, 'name': 'Ops'}
         cookie = self.sign_in(actor)
         user, = self.users(f'superadmin:{self.child_id}')
-        self.assertEqual((user['role'], user['display_name']), ('admin', 'Ops'))
+        self.assertEqual((user['role'], user['display_name'], user['email']), ('admin', 'Ops', None))
         self.assertEqual(self.get('/admin/companies', cookie=cookie)[0], 200)
 
     def test_callback_refuses_a_missing_or_wrong_state_an_old_ticket_and_a_refused_ticket(self):

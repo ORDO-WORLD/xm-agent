@@ -205,8 +205,16 @@ body {
 @media (max-width: 400px) { .company-mobile-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .company-content { min-width: 0; min-height: calc(100dvh - 70px); margin-top: 70px; padding: 0.75rem 1rem; }
 .company-frame .app-page-title { display: none; }
-.company-managing-banner { display:flex; flex-shrink:0; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; padding:8px 10px; border:1px solid #fde68a; border-radius:6px; background:#fffbeb; color:#78350f; font-size:13px; }
-.company-managing-banner .button { min-height:28px; height:auto; padding:4px 8px; border-radius:4px; font-size:12px; font-weight:400; }
+/* Company picker of the platform admin; the navbar copy gives way to the page-heading copy on phones. */
+.company-picker { width:240px; min-width:0; flex-shrink:1; }
+.company-picker [data-slot="combo-box-input-group"] { display:flex; align-items:center; gap:6px; min-height:36px; padding:0 8px; border:1px solid var(--border); border-radius:8px; background:#fff; box-shadow:none; }
+.company-picker [data-slot="combo-box-input-group"]:focus-within { border-color:#3a7bf0; }
+.company-picker .input { min-width:0; min-height:34px; padding:6px 0; border:0; border-radius:0; background:transparent; box-shadow:none; font-size:13px; }
+.company-picker [data-slot="combo-box-trigger"] { padding:0; border:0; background:transparent; color:#475569; }
+.company-picker-icon { width:16px; height:16px; flex-shrink:0; color:#64748b; }
+.company-picker-nav { margin-left:auto; }
+.company-picker-page { width:min(200px, 55vw); margin-left:auto; }
+@media (max-width: 500px) { .company-picker-nav { display:none; } }
 html:has(.company-frame-settings), body:has(.company-frame-settings) { overflow: hidden; }
 .company-frame-settings { height: 100dvh; overflow: hidden; }
 .company-frame-settings .company-content { height: calc(100dvh - 70px); min-height: 0; overflow: hidden; }

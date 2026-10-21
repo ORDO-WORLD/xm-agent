@@ -510,6 +510,9 @@ CREATE INDEX IF NOT EXISTS activity_log_merge_idx ON xm.activity_log(action, act
 -- and the ticket a session is re-checked with on every request (NULL = a password session).
 ALTER TABLE xm.users ADD COLUMN IF NOT EXISTS autoaudit_key text UNIQUE;
 ALTER TABLE xm.sessions ADD COLUMN IF NOT EXISTS sso_ticket text;
+-- Email is the AutoAudit email, for display only: a Company and its Superior may share one, Superadmin has none.
+ALTER TABLE xm.users ALTER COLUMN email DROP NOT NULL;
+ALTER TABLE xm.users DROP CONSTRAINT IF EXISTS users_email_key;
 
 -- Property control writes keep their relay event in the same transaction as the setting.
 ALTER TABLE xm.activity_log ADD COLUMN IF NOT EXISTS autoaudit_event_id uuid UNIQUE;
